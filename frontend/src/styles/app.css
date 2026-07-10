@@ -1,0 +1,190 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #14161c;
+  color: #e8eaf0;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #2a2e38;
+}
+
+.backend-status {
+  font-size: 12px;
+  color: #9aa3b5;
+}
+
+.solver-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.solver-panel select,
+.solver-panel button {
+  background: #7f9cf5;
+  border: none;
+  color: #0f1115;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.solver-panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.density-legend {
+  font-size: 13px;
+  border: 1px solid #2a2e38;
+  border-radius: 4px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.density-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.density-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.score-panel {
+  font-size: 13px;
+  border: 1px solid #2a2e38;
+  border-radius: 4px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+
+.control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.control-panel-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-count-row {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-count-row input,
+.control-panel-inner > input[type="number"] {
+  width: 90px;
+  background: #1c1f26;
+  color: #e8eaf0;
+  border: 1px solid #2a2e38;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.control-panel-inner button,
+.control-panel-inner select {
+  background: #7f9cf5;
+  border: none;
+  color: #0f1115;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.control-panel-inner button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+
+.graph-csv-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.graph-csv-input textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  background: #1c1f26;
+  color: #e8eaf0;
+  border: 1px solid #2a2e38;
+  border-radius: 4px;
+  padding: 8px;
+  resize: vertical;
+}
+
+.graph-csv-input button {
+  align-self: flex-start;
+  background: #7f9cf5;
+  border: none;
+  color: #0f1115;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.csv-errors {
+  color: #ef476f;
+  font-size: 12px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.warnings-panel {
+  border: 1px solid #f0a63a;
+  border-radius: 4px;
+  padding: 8px 12px;
+  background: rgba(240, 166, 58, 0.1);
+  font-size: 13px;
+}
+
+.warnings-panel ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.canvas-wrapper {
+  border: 1px solid #2a2e38;
+  border-radius: 6px;
+  overflow: hidden;
+  width: fit-content;
+}
