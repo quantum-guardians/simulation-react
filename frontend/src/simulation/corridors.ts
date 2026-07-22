@@ -159,10 +159,51 @@ export function isPointInWalkableArea(
   return false;
 }
 
+/** A wall as a bare line segment, for the social-force wall repulsion. */
+export interface WallSegment {
+  a: Point;
+  b: Point;
+}
+
 export interface HubRimSegment {
   center: Point;
   angle: number;
   length: number;
+}
+
+/**
+ * Flattens the corridor floor plan into bare wall segments for the social
+ * force model: two side walls per corridor (offset ±width/2 along the
+ * perpendicular — the force repels from the line itself, so no thickness)
+ * plus the hub rim chords from buildHubRimWalls with zero thickness so they
+ * sit exactly on each hub's radius.
+ */
+export function buildWallSegments(corridors: Corridor[], hubs: JunctionHub[]): WallSegment[] {
+  const segments: WallSegment[] = [];
+
+  for (const corridor of corridors) {
+    if (corridor.length <= 0) continue;
+    const halfWidth = corridor.width / 2;
+    const perpX = -Math.sin(corridor.angle);
+    const perpY = Math.cos(corridor.angle);
+    for (const side of [1, -1]) {
+      segments.push({
+        a: { x: corridor.a.x + perpX * halfWidth * side, y: corridor.a.y + perpY * halfWidth * side },
+        b: { x: corridor.b.x + perpX * halfWidth * side, y: corridor.b.y + perpY * halfWidth * side },
+      });
+    }
+  }
+
+  for (const rim of buildHubRimWalls(hubs, corridors, 0)) {
+    const dx = Math.cos(rim.angle) * (rim.length / 2);
+    const dy = Math.sin(rim.angle) * (rim.length / 2);
+    segments.push({
+      a: { x: rim.center.x - dx, y: rim.center.y - dy },
+      b: { x: rim.center.x + dx, y: rim.center.y + dy },
+    });
+  }
+
+  return segments;
 }
 
 const RIM_ANGULAR_STEP = (12 * Math.PI) / 180;

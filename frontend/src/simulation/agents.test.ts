@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAdjacency,
+  computeDesiredDirections,
   enforceContainment,
   orientedEdgesToLookup,
   pickRandomEndpointPair,
   shortestPath,
-  updateAgentSteering,
   type AgentRuntimeState,
 } from "./agents";
 import { buildCorridors } from "./corridors";
 import type { Point } from "./graph";
-import { addAgentBody, createPhysicsWorld } from "./physics";
+import { addAgent, createSfmWorld } from "./socialForce";
 
 describe("shortestPath (Dijkstra)", () => {
   // Diamond: a-b-d costs 1+1=2, a-c-d costs 5+5=10 -> cheaper route via b.
@@ -98,14 +98,12 @@ describe("pickRandomEndpointPair", () => {
   });
 });
 
-describe("updateAgentSteering", () => {
-  it("advances waypointIndex once the body is within arrival radius", () => {
-    const world = createPhysicsWorld();
-    const body = addAgentBody(world, "agent-1", 0, 0);
-    // Body is essentially at the first waypoint already (within radius),
-    // so steering should immediately advance to waypoint index 1.
-    body.position.x = 0;
-    body.position.y = 0;
+describe("computeDesiredDirections", () => {
+  it("advances waypointIndex once the agent is within arrival radius and aims at the next waypoint", () => {
+    const world = createSfmWorld();
+    // Agent is essentially at the first waypoint already (within radius),
+    // so it should immediately advance to waypoint index 1.
+    addAgent(world, "agent-1", 0, 0);
 
     const agent: AgentRuntimeState = {
       id: "agent-1",
@@ -119,16 +117,42 @@ describe("updateAgentSteering", () => {
       state: "moving",
     };
 
-    updateAgentSteering([agent], world, 60, 10);
+    const desired = computeDesiredDirections([agent], world, 60, 10);
     expect(agent.waypointIndex).toBe(1);
     expect(agent.state).toBe("moving");
+    const motion = desired.get("agent-1");
+    expect(motion).toBeDefined();
+    expect(motion!.ex).toBeCloseTo(1);
+    expect(motion!.ey).toBeCloseTo(0);
+    expect(motion!.speed).toBe(60);
   });
 
-  it("marks the agent arrived once the final waypoint is reached", () => {
-    const world = createPhysicsWorld();
-    const body = addAgentBody(world, "agent-2", 100, 0);
-    body.position.x = 100;
-    body.position.y = 0;
+  it("points the desired direction straight at the current waypoint", () => {
+    const world = createSfmWorld();
+    addAgent(world, "agent-3", 0, 0);
+
+    const agent: AgentRuntimeState = {
+      id: "agent-3",
+      waypoints: [
+        { x: 0, y: 0 },
+        { x: 0, y: 80 },
+      ],
+      waypointIndex: 1,
+      startLeaf: "a",
+      targetLeaf: "b",
+      state: "moving",
+    };
+
+    const desired = computeDesiredDirections([agent], world, 25, 10);
+    const motion = desired.get("agent-3");
+    expect(motion).toBeDefined();
+    expect(motion!.ex).toBeCloseTo(0);
+    expect(motion!.ey).toBeCloseTo(1);
+  });
+
+  it("marks the agent arrived (and emits no desired motion) once the final waypoint is reached", () => {
+    const world = createSfmWorld();
+    addAgent(world, "agent-2", 100, 0);
 
     const agent: AgentRuntimeState = {
       id: "agent-2",
@@ -142,8 +166,9 @@ describe("updateAgentSteering", () => {
       state: "moving",
     };
 
-    updateAgentSteering([agent], world, 60, 10);
+    const desired = computeDesiredDirections([agent], world, 60, 10);
     expect(agent.state).toBe("arrived");
+    expect(desired.has("agent-2")).toBe(false);
   });
 });
 
@@ -160,8 +185,8 @@ describe("enforceContainment", () => {
   });
 
   it("records the last valid position while an agent stays on the floor", () => {
-    const world = createPhysicsWorld();
-    addAgentBody(world, "inside", 100, 100);
+    const world = createSfmWorld();
+    addAgent(world, "inside", 100, 100);
     const lastValid = new Map<string, Point>();
 
     enforceContainment(world, corridors, hubs, lastValid);
@@ -169,29 +194,30 @@ describe("enforceContainment", () => {
   });
 
   it("snaps an agent found outside the floor back to its last valid position with zero velocity", () => {
-    const world = createPhysicsWorld();
-    const body = addAgentBody(world, "escapee", 100, 100);
+    const world = createSfmWorld();
+    const agent = addAgent(world, "escapee", 100, 100);
     const lastValid = new Map<string, Point>();
     enforceContainment(world, corridors, hubs, lastValid); // records (100, 100)
 
-    // Teleport far outside the corridor (simulating a solver ejection).
-    body.position.x = 100;
-    body.position.y = 400;
+    // Teleport far outside the corridor (simulating an ejection).
+    agent.position.x = 100;
+    agent.position.y = 400;
+    agent.velocity.x = 7;
     enforceContainment(world, corridors, hubs, lastValid);
 
-    expect(body.position.x).toBeCloseTo(100);
-    expect(body.position.y).toBeCloseTo(100);
-    expect(body.velocity.x).toBeCloseTo(0);
-    expect(body.velocity.y).toBeCloseTo(0);
+    expect(agent.position.x).toBeCloseTo(100);
+    expect(agent.position.y).toBeCloseTo(100);
+    expect(agent.velocity.x).toBeCloseTo(0);
+    expect(agent.velocity.y).toBeCloseTo(0);
   });
 
   it("leaves an outside agent untouched when no last valid position is known", () => {
-    const world = createPhysicsWorld();
-    const body = addAgentBody(world, "unknown", 500, 500);
+    const world = createSfmWorld();
+    const agent = addAgent(world, "unknown", 500, 500);
     const lastValid = new Map<string, Point>();
 
     enforceContainment(world, corridors, hubs, lastValid);
-    expect(body.position.x).toBe(500);
-    expect(body.position.y).toBe(500);
+    expect(agent.position.x).toBe(500);
+    expect(agent.position.y).toBe(500);
   });
 });

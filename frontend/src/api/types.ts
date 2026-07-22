@@ -23,72 +23,46 @@ export interface OrientedEdge {
   to: NodeId;
 }
 
-export interface ScorePayload {
-  apsp_sum: number | null;
-  strong_connect_rate: number | null;
-  flow_score: number | null;
-  sample_score: number | null;
+/**
+ * Solver keys double as the external mr2s-backend endpoint segments:
+ * POST /api/v1/{solver}. See BACKEND_REFERENCE.md.
+ */
+export type SolverType = "mr2s" | "raw-sa" | "brute-force";
+
+/** External wire format: one undirected weighted edge (vertices as ints). */
+export interface WeightedEdgeDto {
+  vertices: [number, number];
+  weight: number;
 }
 
-export interface SolutionPayload {
+export interface WeightedRequestDto {
+  edges: WeightedEdgeDto[];
+}
+
+/** External wire format: solver response. `_from` avoids the JS reserved word. */
+export interface V1ResponseDto {
+  edges: { _from: number; to: number }[];
+  optimized_graph_score: number;
+  bidirectional_graph_score: number;
+}
+
+/**
+ * Adapted score. The external API returns -1 for "not (strongly) connected";
+ * the adapter maps that to null so the UI can't mistake it for a real sum.
+ */
+export interface OrientationScore {
+  optimizedApsp: number | null;
+  bidirectionalApsp: number | null;
+  stronglyConnected: boolean;
+}
+
+/** What solveOrientation resolves to after adapting the v1 response. */
+export interface SolveResult {
   orientedEdges: OrientedEdge[];
-  score: ScorePayload | null;
-  unorientedEdgeIds: EdgeId[];
-}
-
-export type SolverType =
-  | "robbin"
-  | "ils"
-  | "sa"
-  | "qubo"
-  | "qubo_sa"
-  | "qubo_qa"
-  | "dnc_sa"
-  | "dnc_qubo"
-  | "dnc_qubo_sa"
-  | "dnc_qubo_qa";
-
-export interface SolveOrientOptions {
-  max_iter?: number;
-  patience?: number;
-  is_relaxed?: boolean;
-  perturb_strength?: number;
-  sweeps_per_temperature?: number;
-  num_restarts?: number;
-  random_seed?: number;
-  apsp_weight?: number;
-  flow_weight?: number;
-  disconnected_pair_penalty?: number;
-  max_vertices?: number;
-}
-
-export interface SolveOrientRequest {
-  solver: SolverType;
-  graph: GraphPayload;
-  options?: SolveOrientOptions;
-}
-
-export interface SolveOrientResponse {
-  solution: SolutionPayload;
+  score: OrientationScore;
   warnings: string[];
-  bridgeDetected: boolean;
-  bridgeEdgeIds: EdgeId[];
 }
 
 export interface HealthResponse {
-  ok: boolean;
-  module: string;
-  moduleAvailable: boolean;
-  version: string;
-}
-
-export interface SolverInfo {
-  key: SolverType;
-  label: string;
-  available: boolean;
-  reason: string | null;
-}
-
-export interface SolversResponse {
-  solvers: SolverInfo[];
+  message: string;
 }

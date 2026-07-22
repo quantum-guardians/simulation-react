@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCorridors,
   buildHubRimWalls,
+  buildWallSegments,
   computeCorridorWidth,
   isPointInWalkableArea,
   type CorridorWidthOptions,
@@ -147,5 +148,52 @@ describe("buildHubRimWalls", () => {
     // The half of each rim facing away from the corridor is still walled.
     const segments = buildHubRimWalls(hubs, corridors);
     expect(segments.length).toBeGreaterThan(0);
+  });
+});
+
+describe("buildWallSegments", () => {
+  const positions = new Map<string, Point>([
+    ["a", { x: 0, y: 100 }],
+    ["b", { x: 300, y: 100 }],
+  ]);
+  const edges = [{ source: "a", target: "b", weight: 1 }]; // width 26
+  const { corridors, hubs } = buildCorridors(positions, edges, OPTS);
+
+  it("emits two side walls per corridor at exactly ±width/2", () => {
+    const corridor = corridors[0];
+    const segments = buildWallSegments([corridor], []);
+    expect(segments).toHaveLength(2);
+    for (const segment of segments) {
+      // Horizontal corridor along y=100: side walls sit at y = 100 ± 13.
+      expect(Math.abs(segment.a.y - 100)).toBeCloseTo(corridor.width / 2, 6);
+      expect(segment.a.y).toBeCloseTo(segment.b.y, 6);
+      expect(Math.abs(segment.b.x - segment.a.x)).toBeCloseTo(corridor.length, 6);
+    }
+  });
+
+  it("skips degenerate (zero-length) corridors", () => {
+    const closePositions = new Map<string, Point>([
+      ["a", { x: 100, y: 100 }],
+      ["b", { x: 105, y: 100 }],
+    ]);
+    const degenerate = buildCorridors(closePositions, [{ source: "a", target: "b", weight: 50 }], OPTS);
+    const segments = buildWallSegments(degenerate.corridors, []);
+    expect(segments).toHaveLength(0);
+  });
+
+  it("places hub rim chords with midpoints on the hub-radius circle", () => {
+    const segments = buildWallSegments([], hubs);
+    expect(segments.length).toBeGreaterThan(0);
+    const hubByCenter = hubs.map((h) => h);
+    for (const segment of segments) {
+      const mid = {
+        x: (segment.a.x + segment.b.x) / 2,
+        y: (segment.a.y + segment.b.y) / 2,
+      };
+      const onSomeRim = hubByCenter.some(
+        (h) => Math.abs(Math.hypot(mid.x - h.center.x, mid.y - h.center.y) - h.radius) < 1e-6
+      );
+      expect(onSomeRim).toBe(true);
+    }
   });
 });

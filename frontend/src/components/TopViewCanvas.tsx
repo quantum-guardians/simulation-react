@@ -10,18 +10,17 @@ import {
   hitTestNode,
 } from "../simulation/draw";
 import {
-  createPhysicsWorld,
-  destroyPhysicsWorld,
+  createSfmWorld,
   rebuildWalls,
-  stepPhysicsFixed,
+  stepSocialForce,
   FIXED_DT_MS,
-  type PhysicsWorld,
-} from "../simulation/physics";
+  type SfmWorld,
+} from "../simulation/socialForce";
 import {
+  computeDesiredDirections,
   enforceContainment,
   respawnArrivedAgents,
   spawnAgent,
-  updateAgentSteering,
   type AdjacencyEntry,
   type AgentRuntimeState,
 } from "../simulation/agents";
@@ -97,7 +96,7 @@ export function TopViewCanvas({
     propsRef.current = { corridors, hubs, orientedEdges, showGraphOverlay, nodeIds, edges, agentSpeed };
   }, [corridors, hubs, orientedEdges, showGraphOverlay, nodeIds, edges, agentSpeed]);
 
-  const physicsWorldRef = useRef<PhysicsWorld | null>(null);
+  const physicsWorldRef = useRef<SfmWorld | null>(null);
   const agentsRef = useRef<AgentRuntimeState[]>([]);
   const simulationConfigRef = useRef<SimulationConfig | null>(null);
   const nodePositionsForSimRef = useRef<Map<string, Point>>(new Map(nodePositions));
@@ -120,10 +119,7 @@ export function TopViewCanvas({
   // Paths" click - not on every render.
   useEffect(() => {
     if (!simulation) {
-      if (physicsWorldRef.current) {
-        destroyPhysicsWorld(physicsWorldRef.current);
-        physicsWorldRef.current = null;
-      }
+      physicsWorldRef.current = null;
       agentsRef.current = [];
       simulationConfigRef.current = null;
       return;
@@ -136,8 +132,7 @@ export function TopViewCanvas({
     simulationConfigRef.current = simulation;
     if (!isNewGeneration) return;
 
-    if (physicsWorldRef.current) destroyPhysicsWorld(physicsWorldRef.current);
-    const world = createPhysicsWorld();
+    const world = createSfmWorld();
     rebuildWalls(world, corridors, hubs);
     physicsWorldRef.current = world;
     nextAgentIndexRef.current = 0;
@@ -203,12 +198,6 @@ export function TopViewCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [corridors, hubs]);
 
-  useEffect(() => {
-    return () => {
-      if (physicsWorldRef.current) destroyPhysicsWorld(physicsWorldRef.current);
-    };
-  }, []);
-
   function draw() {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -227,8 +216,8 @@ export function TopViewCanvas({
       drawOrientedArrows(ctx, positionsRef.current, orientedEdges);
     }
     const world = physicsWorldRef.current;
-    if (world && world.agentBodies.size > 0) {
-      const agentPositions = Array.from(world.agentBodies.values()).map((b) => b.position);
+    if (world && world.agents.size > 0) {
+      const agentPositions = Array.from(world.agents.values()).map((a) => a.position);
       drawAgents(ctx, agentPositions, AGENT_RADIUS);
     }
   }
@@ -257,8 +246,8 @@ export function TopViewCanvas({
         // distance before the next arrival check, which reads as the agent
         // suddenly reversing direction.
         while (acc >= FIXED_DT_MS) {
-          updateAgentSteering(agentsRef.current, world, propsRef.current.agentSpeed);
-          stepPhysicsFixed(world, FIXED_DT_MS, propsRef.current.agentSpeed);
+          const desired = computeDesiredDirections(agentsRef.current, world, propsRef.current.agentSpeed);
+          stepSocialForce(world, desired, FIXED_DT_MS, propsRef.current.agentSpeed);
           enforceContainment(
             world,
             propsRef.current.corridors,
@@ -282,7 +271,7 @@ export function TopViewCanvas({
               lastValidPositions: lastValidPositionsRef.current,
             });
           }
-          const agentPositions = Array.from(world.agentBodies.values()).map((b) => b.position);
+          const agentPositions = Array.from(world.agents.values()).map((a) => a.position);
           densityByCorridorRef.current = computeCorridorOccupancy(propsRef.current.corridors, agentPositions);
         }
       }

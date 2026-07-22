@@ -1,10 +1,7 @@
-import Matter from "matter-js";
 import type { Point, RawEdge } from "./graph";
 import { isPointInWalkableArea, type Corridor, type JunctionHub } from "./corridors";
-import { addAgentBody, removeAgentBody, FIXED_DT_MS, type PhysicsWorld } from "./physics";
+import { addAgent, removeAgent, type DesiredMotion, type SfmWorld } from "./socialForce";
 import { AGENT_MAX_SPEED, ARRIVAL_RADIUS } from "./presets";
-
-const { Body } = Matter;
 
 export interface AdjacencyEntry {
   to: string;
@@ -134,7 +131,7 @@ export interface AgentRuntimeState {
 }
 
 export interface SpawnAgentDeps {
-  world: PhysicsWorld;
+  world: SfmWorld;
   nodePositions: Map<string, Point>;
   adjacency: Map<string, AdjacencyEntry[]>;
   nodeIds: string[];
@@ -143,17 +140,18 @@ export interface SpawnAgentDeps {
   /** When provided, the spawn position is recorded as the agent's first
    * known-valid position, so enforceContainment can recover it even if
    * the very first physics step ejects it (stacked spawns overlap heavily
-   * and Matter's overlap resolution can shove bodies outside before any
+   * and the overlap resolution can shove agents outside before any
    * position was recorded). */
   lastValidPositions?: Map<string, Point>;
 }
 
 const MAX_SPAWN_PAIR_ATTEMPTS = 30;
 
-// Stacked spawns at the exact same point make Matter's overlap resolution
-// violently eject bodies; a small random scatter keeps the initial pile
-// loose enough to settle gently. Must stay under the smallest hub radius
-// (minWidth/2 + padding = 12) so scattered spawns are still on the floor.
+// Stacked spawns at the exact same point start with deep body overlap that
+// takes many contact-force ticks to relax; a small random scatter keeps the
+// initial pile loose enough to settle gently. Must stay under the smallest
+// hub radius (minWidth/2 + padding = 12) so scattered spawns are still on
+// the floor.
 const SPAWN_JITTER_PX = 6;
 
 export function spawnAgent(id: string, deps: SpawnAgentDeps): AgentRuntimeState | null {
@@ -188,7 +186,7 @@ export function spawnAgent(id: string, deps: SpawnAgentDeps): AgentRuntimeState 
     x: waypoints[0].x + Math.cos(jitterAngle) * jitterDist,
     y: waypoints[0].y + Math.sin(jitterAngle) * jitterDist,
   };
-  addAgentBody(world, id, startPos.x, startPos.y);
+  addAgent(world, id, startPos.x, startPos.y);
   deps.lastValidPositions?.set(id, { x: startPos.x, y: startPos.y });
 
   return {
@@ -202,66 +200,64 @@ export function spawnAgent(id: string, deps: SpawnAgentDeps): AgentRuntimeState 
 }
 
 /**
- * Direct velocity-setting steering toward the current waypoint.
- *
- * An earlier version of this function used a proportional force
- * (Body.applyForce) instead, on the theory that hard-overwriting velocity
- * every tick would fight Matter's collision response. In practice that
- * produced the opposite problem: a pure proportional controller on
- * velocity error has no damping term, and combined with per-tick collision
- * impulses from a crowded corridor it overshot and oscillated - visible as
- * heavy jitter, especially for agents pressed against a wall ("stuck"
- * agents were actually vibrating in place, not stationary). A direct,
- * deterministic velocity set has no such feedback loop to destabilize;
- * Matter's own positional correction still keeps bodies from overlapping
- * walls/each other (restitution is 0, so no bounce-back either), it just
- * does so smoothly instead of via a fighting force.
+ * Computes each moving agent's desired direction + speed toward its current
+ * waypoint (the "e_i · v0_i" input of the social force model), advancing
+ * waypoints and arrival state as a side effect. The returned map feeds
+ * stepSocialForce, which turns it into a driving force — actual velocities
+ * emerge from that force combined with agent/wall repulsion, so this
+ * function never writes velocities for moving agents.
  *
  * IMPORTANT: call this once per fixed physics tick (inside the same
- * accumulator loop as stepPhysicsFixed), not once per rendered frame -
+ * accumulator loop as stepSocialForce), not once per rendered frame -
  * otherwise waypoint-arrival is only checked at frame cadence, and a slow
  * frame can let an agent overshoot several ticks past a waypoint before
- * the next check, which also reads as the agent doubling back.
+ * the next check, which reads as the agent doubling back.
  */
-export function updateAgentSteering(
+export function computeDesiredDirections(
   agents: AgentRuntimeState[],
-  world: PhysicsWorld,
+  world: SfmWorld,
   maxSpeed: number = AGENT_MAX_SPEED,
   arrivalRadius: number = ARRIVAL_RADIUS
-): void {
-  const speedPerTick = maxSpeed * (FIXED_DT_MS / 1000);
+): Map<string, DesiredMotion> {
+  const desired = new Map<string, DesiredMotion>();
 
   for (const agent of agents) {
     if (agent.state === "arrived") continue;
-    const body = world.agentBodies.get(agent.id);
-    if (!body) continue;
+    const sfmAgent = world.agents.get(agent.id);
+    if (!sfmAgent) continue;
 
     const waypoint = agent.waypoints[agent.waypointIndex];
     if (!waypoint) {
       agent.state = "arrived";
-      Body.setVelocity(body, { x: 0, y: 0 });
       continue;
     }
 
-    const dx = waypoint.x - body.position.x;
-    const dy = waypoint.y - body.position.y;
+    const dx = waypoint.x - sfmAgent.position.x;
+    const dy = waypoint.y - sfmAgent.position.y;
     const dist = Math.hypot(dx, dy);
 
     if (dist < arrivalRadius) {
       if (agent.waypointIndex >= agent.waypoints.length - 1) {
         agent.state = "arrived";
-        Body.setVelocity(body, { x: 0, y: 0 });
       } else {
         agent.waypointIndex += 1;
+        // Emit this tick's desired motion toward the NEXT waypoint so the
+        // agent doesn't coast (undriven) for a tick at every corner.
+        const next = agent.waypoints[agent.waypointIndex];
+        const ndx = next.x - sfmAgent.position.x;
+        const ndy = next.y - sfmAgent.position.y;
+        const ndist = Math.hypot(ndx, ndy);
+        if (ndist > 1e-9) {
+          desired.set(agent.id, { ex: ndx / ndist, ey: ndy / ndist, speed: maxSpeed });
+        }
       }
       continue;
     }
 
-    Body.setVelocity(body, {
-      x: (dx / dist) * speedPerTick,
-      y: (dy / dist) * speedPerTick,
-    });
+    desired.set(agent.id, { ex: dx / dist, ey: dy / dist, speed: maxSpeed });
   }
+
+  return desired;
 }
 
 // Slack for the physics solver's positional slop; an agent's center may sit
@@ -272,26 +268,29 @@ const CONTAINMENT_TOLERANCE = 2;
  * Hard "never visibly tunnel" guarantee, independent of solver behavior:
  * any agent whose center has ended up outside the walkable floor (corridor
  * rectangles + hub disks) is snapped back to the last position where it was
- * inside, with velocity zeroed. Wall bodies, substepping, and rim segments
- * make escapes rare; this catches whatever slips through anyway (e.g. an
- * overlap-resolution shove past a thin wall's midplane under heavy crowd
- * pressure). Call once per fixed tick, after stepPhysicsFixed.
+ * inside, with velocity zeroed. Wall repulsion, substepping, and the
+ * crossing checks in stepSocialForce make escapes rare; this catches
+ * whatever slips through anyway (e.g. a shove past the end of a wall
+ * segment under heavy crowd pressure). Call once per fixed tick, after
+ * stepSocialForce.
  */
 export function enforceContainment(
-  world: PhysicsWorld,
+  world: SfmWorld,
   corridors: Corridor[],
   hubs: JunctionHub[],
   lastValidPositions: Map<string, Point>
 ): void {
-  for (const [id, body] of world.agentBodies) {
-    if (isPointInWalkableArea(body.position, corridors, hubs, CONTAINMENT_TOLERANCE)) {
-      lastValidPositions.set(id, { x: body.position.x, y: body.position.y });
+  for (const [id, agent] of world.agents) {
+    if (isPointInWalkableArea(agent.position, corridors, hubs, CONTAINMENT_TOLERANCE)) {
+      lastValidPositions.set(id, { x: agent.position.x, y: agent.position.y });
       continue;
     }
     const lastValid = lastValidPositions.get(id);
     if (!lastValid) continue; // spawned at a node center, so this shouldn't occur
-    Body.setPosition(body, lastValid);
-    Body.setVelocity(body, { x: 0, y: 0 });
+    agent.position.x = lastValid.x;
+    agent.position.y = lastValid.y;
+    agent.velocity.x = 0;
+    agent.velocity.y = 0;
   }
 }
 
@@ -304,7 +303,7 @@ export function respawnArrivedAgents(
 ): AgentRuntimeState[] {
   return agents.map((agent) => {
     if (agent.state !== "arrived") return agent;
-    removeAgentBody(deps.world, agent.id);
+    removeAgent(deps.world, agent.id);
     return spawnAgent(agent.id, deps) ?? agent;
   });
 }

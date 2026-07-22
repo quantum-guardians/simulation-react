@@ -1,14 +1,10 @@
-# Python
-backend/.venv/
-**/__pycache__/
-*.pyc
-.pytest_cache/
-
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
 frontend/node_modules/.tmp/
 *.tsbuildinfo
+frontend/.env
+frontend/.env.local
 
 # OS / editor
 .DS_Store

@@ -23,7 +23,7 @@ import {
   DEFAULT_AGENT_COUNT,
 } from "./simulation/presets";
 import { getHealth, solveOrientation } from "./api/client";
-import type { OrientedEdge, ScorePayload, SolverType } from "./api/types";
+import type { OrientationScore, OrientedEdge, SolverType } from "./api/types";
 
 type Stage = "input" | "layout" | "simulating";
 
@@ -42,20 +42,16 @@ function App() {
   const [showGraphOverlay, setShowGraphOverlay] = useState(true);
   const [agentCount, setAgentCount] = useState(0);
 
-  const [solver, setSolver] = useState<SolverType>("robbin");
+  const [solver, setSolver] = useState<SolverType>("mr2s");
   const [isRunningSolver, setIsRunningSolver] = useState(false);
   const [orientedEdges, setOrientedEdges] = useState<OrientedEdge[]>([]);
-  const [score, setScore] = useState<ScorePayload | null>(null);
+  const [score, setScore] = useState<OrientationScore | null>(null);
   const [solverWarnings, setSolverWarnings] = useState<string[]>([]);
   const [backendStatus, setBackendStatus] = useState<string>("checking backend…");
 
   useEffect(() => {
     getHealth()
-      .then((res) =>
-        setBackendStatus(
-          res.moduleAvailable ? "backend connected, mr2s_module ready" : "backend connected, mr2s_module NOT installed"
-        )
-      )
+      .then(() => setBackendStatus("backend connected"))
       .catch(() => setBackendStatus("backend unreachable"));
   }, []);
 
@@ -91,8 +87,7 @@ function App() {
     const leaves = findLeafNodes(csvGraph.nodeIds, csvGraph.edges);
     // Edges the solver has already oriented (if "Run Solver" was clicked
     // before "Generate Paths") become one-way from the start; anything
-    // undetermined (not yet solved, or a bridge Robbin left unoriented)
-    // stays walkable both ways.
+    // undetermined (not yet solved) stays walkable both ways.
     const adjacency = buildAdjacency(csvGraph.nodeIds, csvGraph.edges, orientedEdgesToLookup(orientedEdges));
     setSimulation({
       generation: Date.now(),
@@ -134,16 +129,16 @@ function App() {
           weight: e.weight,
         })),
       };
-      const response = await solveOrientation({ solver, graph: graphPayload });
-      setOrientedEdges(response.solution.orientedEdges);
-      setScore(response.solution.score);
-      setSolverWarnings(response.warnings);
+      const result = await solveOrientation(graphPayload, solver);
+      setOrientedEdges(result.orientedEdges);
+      setScore(result.score);
+      setSolverWarnings(result.warnings);
 
       // Re-route future spawns/respawns to respect the newly-solved
       // direction, without resetting the world or agents already mid-walk
       // (same generation - see TopViewCanvas's handling of this).
       if (csvGraph) {
-        const lookup = orientedEdgesToLookup(response.solution.orientedEdges);
+        const lookup = orientedEdgesToLookup(result.orientedEdges);
         const nextAdjacency = buildAdjacency(csvGraph.nodeIds, csvGraph.edges, lookup);
         setSimulation((prev) => (prev ? { ...prev, adjacency: nextAdjacency } : prev));
       }

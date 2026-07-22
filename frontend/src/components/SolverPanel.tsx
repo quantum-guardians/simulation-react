@@ -1,18 +1,9 @@
-import { useEffect, useState } from "react";
-import { getSolvers } from "../api/client";
-import type { SolverInfo, SolverType } from "../api/types";
+import type { SolverType } from "../api/types";
 
-const FALLBACK_SOLVERS: SolverInfo[] = [
-  { key: "robbin", label: "Robbin", available: true, reason: null },
-  { key: "ils", label: "Iterated Local Search", available: true, reason: null },
-  { key: "sa", label: "Simulated Annealing", available: true, reason: null },
-  { key: "qubo", label: "QUBO", available: true, reason: null },
-  { key: "qubo_sa", label: "QUBO - SA", available: true, reason: null },
-  { key: "qubo_qa", label: "QUBO - QA", available: false, reason: null },
-  { key: "dnc_sa", label: "Divide & Conquer - SA", available: true, reason: null },
-  { key: "dnc_qubo", label: "Divide & Conquer - QUBO", available: true, reason: null },
-  { key: "dnc_qubo_sa", label: "Divide & Conquer - QUBO SA", available: true, reason: null },
-  { key: "dnc_qubo_qa", label: "Divide & Conquer - QUBO QA", available: false, reason: null },
+const SOLVER_OPTIONS: { key: SolverType; label: string }[] = [
+  { key: "mr2s", label: "MR2S (QUBO)" },
+  { key: "raw-sa", label: "Simulated Annealing" },
+  { key: "brute-force", label: "Brute Force (small graphs only)" },
 ];
 
 export interface SolverPanelProps {
@@ -24,23 +15,6 @@ export interface SolverPanelProps {
 }
 
 export function SolverPanel({ solver, onSolverChange, onRunSolver, isRunning, disabled }: SolverPanelProps) {
-  const [solvers, setSolvers] = useState<SolverInfo[]>(FALLBACK_SOLVERS);
-
-  useEffect(() => {
-    let cancelled = false;
-    getSolvers()
-      .then((res) => {
-        if (!cancelled) setSolvers(res.solvers);
-      })
-      .catch(() => {
-        // Backend may not be reachable yet; keep the static fallback list
-        // so the UI stays usable rather than breaking.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   return (
     <div className="solver-panel">
       <label htmlFor="solver-select">Solver</label>
@@ -49,10 +23,9 @@ export function SolverPanel({ solver, onSolverChange, onRunSolver, isRunning, di
         value={solver}
         onChange={(e) => onSolverChange(e.target.value as SolverType)}
       >
-        {solvers.map((s) => (
-          <option key={s.key} value={s.key} disabled={!s.available} title={s.reason ?? undefined}>
+        {SOLVER_OPTIONS.map((s) => (
+          <option key={s.key} value={s.key}>
             {s.label}
-            {!s.available ? " (unavailable)" : ""}
           </option>
         ))}
       </select>

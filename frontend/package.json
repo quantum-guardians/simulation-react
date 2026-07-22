@@ -11,12 +11,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "matter-js": "^0.20.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
-    "@types/matter-js": "^0.20.2",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

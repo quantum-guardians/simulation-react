@@ -4,40 +4,37 @@
 
 CSV로 그래프(간선 목록)를 입력하면 자동 레이아웃 후 노드를 드래그로 조정할 수 있고,
 "Generate Paths"를 누르면 각 간선의 weight에 비례한 폭을 가진 골목(복도)이 실제
-이동 공간(벽 콜라이더 포함)으로 생성됩니다. 사람(작은 원)은 리프 노드 사이를
-물리 엔진(matter.js) 기반으로 이동하며, 서로 부딪히면 콜라이더를 유지한 채
-충돌/정체가 일어납니다. `mr2s_module`의 edge-orientation solver를 백엔드에서
-실행해 방향 화살표/점수를 오버레이로 볼 수 있습니다.
+이동 공간으로 생성됩니다. 사람(작은 원)은 리프 노드 사이를
+**Social Force Model**(Helbing & Molnár) 기반으로 이동하며, 서로 가까워지면
+사회적 반발력으로 간격을 유지하고 밀집 시에는 몸통 접촉력/마찰로 실제처럼
+밀쳐집니다. 간선 방향 최적화는 배포된 외부 **mr2s-backend** API를 호출해
+방향 화살표/점수를 오버레이로 볼 수 있습니다.
 
 ## 아키텍처
 
 ```text
-backend/    FastAPI, mr2s_module 래핑 (그래프 변환, solver 실행)
-frontend/   React + TypeScript + Vite, 탑뷰 캔버스 + matter.js 물리 시뮬레이션
+frontend/   React + TypeScript + Vite, 탑뷰 캔버스 + Social Force Model 군중 시뮬레이션
 ```
 
-`mr2s_module`은 이 repo에 포함되어 있지 않고, 형제 디렉터리
-`../mr2s-module` (`C:\Users\me\Desktop\Develope\mr2s-module`)에 있는 것을
-editable install로 사용합니다.
+간선 방향 최적화 백엔드는 이 저장소에 포함되어 있지 않고, 배포된
+**`https://quantum.yunseong.dev`** (mr2s-backend, FastAPI)를 사용합니다.
+API 명세는 [BACKEND_REFERENCE.md](BACKEND_REFERENCE.md)를 참고하세요.
+사용 엔드포인트: `POST /api/v1/mr2s`, `/api/v1/raw-sa`, `/api/v1/brute-force`.
+
+### 백엔드 연동 방식
+
+- **dev**: 백엔드의 CORS 허용 목록에 localhost가 없으므로, Vite dev 서버의
+  proxy(`/mr2s-api` → `https://quantum.yunseong.dev`)를 경유합니다
+  (`frontend/vite.config.ts`). 로컬에서 mr2s-backend를 직접 띄웠다면
+  `VITE_PROXY_TARGET=http://localhost:8000`으로 대상을 바꿀 수 있습니다.
+- **prod**: 빌드 시 `VITE_API_BASE_URL=https://quantum.yunseong.dev`를 설정해
+  직접 호출합니다. 단, 빌드 결과물을 호스팅하는 오리진이 백엔드의 CORS
+  허용 목록(`quantum-guardians.github.io`, `mr2s.vercel.app`,
+  `qi4uinpnu.vercel.app`)에 있어야 하며, 새 도메인은 백엔드 `main.py`의
+  `allow_origins`에 추가가 필요합니다.
+- 설정 예시는 `frontend/.env.example` 참고.
 
 ## 실행 방법
-
-### backend
-
-```bash
-cd backend
-python -m venv .venv
-# Windows: .venv\Scripts\activate  /  macOS-Linux: source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e ../../mr2s-module   # mr2s_module 소스가 있는 형제 저장소를 editable로 설치
-                                     # dwave-ocean-sdk 등 무거운 의존성이 함께 설치되므로 시간이 걸릴 수 있음
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
-```
-
-`mr2s_module`을 설치하지 않아도 서버는 뜨지만(`/api/health`가
-`moduleAvailable: false`를 반환), solver 관련 엔드포인트는 500을 반환합니다.
-
-### frontend
 
 ```bash
 cd frontend
@@ -61,32 +58,43 @@ http://localhost:5173
    노드 사이를 오가며 이동을 시작합니다. Play/Pause로 시뮬레이션을
    제어하고, 시뮬레이션 도중에도 숫자를 바꾼 뒤 "Add"를 누르면 그만큼
    사람이 추가로 투입됩니다.
-4. Solver(robbin/ils/sa/qubo 계열/dnc 계열)를 선택하고 "Run Solver"를
-   누르면 방향 화살표와 score(APSP sum, strong connect rate 등)가
-   표시됩니다. 그래프에 bridge(다리 간선)가 있으면 경고가 표시되며,
-   Robbin은 이 경우 방향을 지정하지 않고(구조적으로 불가능) 대신
-   ils/sa/qubo/dnc 계열을 선택하면 방향이 지정됩니다.
+4. Solver(MR2S(QUBO) / Simulated Annealing / Brute Force)를 선택하고
+   "Run Solver"를 누르면 방향 화살표와 score(Optimized/Bidirectional APSP)가
+   표시됩니다.
+   - 점수가 "not strongly connected"로 표시되면 방향 그래프가 강연결이
+     아니라는 뜻이며(서버 응답 `-1`), 일부 경로가 불가능할 수 있다는
+     경고가 함께 표시됩니다.
+   - 최적화는 서버에서 10초 제한이 있어 초과 시 타임아웃 메시지가
+     표시됩니다. Brute Force는 간선 수에 지수적(2^E)이므로 작은 그래프
+     전용입니다.
+
+## 군중 이동 모델 (Social Force Model)
+
+에이전트 이동은 Helbing & Molnár의 Social Force Model을 따릅니다
+(`frontend/src/simulation/socialForce.ts`):
+
+- **구동력**: 희망 속도 × 다음 웨이포인트 방향으로 이완 시간 τ에 걸쳐 가속
+- **에이전트 간 반발력**: 거리에 지수적으로 감소하는 사회적 반발 +
+  접촉 시 몸통력(body force)과 미끄럼 마찰(sliding friction)
+- **벽 반발력**: 복도 벽/허브 테두리 세그먼트에 대해 동일한 형태의 힘
+
+경로 탐색(웨이포인트)은 solver가 정한 간선 방향을 존중하는 Dijkstra
+최단경로를 사용합니다. 튜닝 상수는 `frontend/src/simulation/presets.ts`에
+모여 있습니다.
 
 ## 테스트
 
 ```bash
-# backend
-cd backend
-pytest
-
-# frontend
 cd frontend
 npm run test
 ```
 
 ## 알려진 제한 사항 / 다음 단계
 
-- 골목의 교차점(hub)은 현재 완전히 열린 원(Phase 1)으로 처리됩니다.
-  실제 스트레스 테스트에서는 새는(leak) 현상이 없었지만, 그래프가 훨씬
-  복잡해지면 hub 테두리를 벽으로 세분화하는 Phase 2 업그레이드가 필요할
-  수 있습니다.
-- 그리드/blockedCells 기반 입력(`/api/graph/from-grid`)과
-  `/api/simulate/step`은 이번 작업 범위에서 의도적으로 구현하지
-  않았습니다. Agent 이동은 전부 프런트엔드의 matter.js 물리 루프에서
-  처리됩니다.
-- `/api/partition` (DnC partition overlay)은 아직 구현되지 않았습니다.
+- 골목의 교차점(hub)은 현재 완전히 열린 원으로 처리됩니다.
+- 외부 API는 간선 가중치를 정수로만 받으므로 소수 가중치는 반올림되며
+  경고가 표시됩니다. 같은 두 노드 사이의 중복 간선은 첫 간선만
+  전송됩니다.
+- 외부 API는 bridge(다리 간선)를 포함한 모든 간선에 방향을 강제하므로,
+  bridge가 있는 그래프는 강연결이 될 수 없어 점수가
+  "not strongly connected"로 표시됩니다.
