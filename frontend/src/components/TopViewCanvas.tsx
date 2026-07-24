@@ -18,13 +18,20 @@ import {
 } from "../simulation/socialForce";
 import {
   computeDesiredDirections,
-  enforceContainment,
-  respawnArrivedAgents,
+  constrainAgentsToRoutes,
+  continueArrivedAgents,
   spawnAgent,
   type AdjacencyEntry,
   type AgentRuntimeState,
 } from "../simulation/agents";
-import { AGENT_MAX_SPEED, AGENT_RADIUS } from "../simulation/presets";
+import {
+  ADD_AGENTS_BATCH_INTERVAL_MS,
+  ADD_AGENTS_BATCH_SIZE,
+  AGENT_MAX_SPEED,
+  AGENT_RADIUS,
+  STUCK_PATIENCE_TICKS,
+  STUCK_RAMP_TICKS,
+} from "../simulation/presets";
 import { computeCorridorOccupancy } from "../simulation/density";
 import type { OrientedEdge } from "../api/types";
 
@@ -44,6 +51,26 @@ export interface AddAgentsRequest {
   count: number;
 }
 
+export interface StuckAgentInfo {
+  id: string;
+  target: string;
+  waypoint: number;
+  stuckSeconds: number;
+  x: number;
+  y: number;
+}
+
+export interface SimulationStats {
+  moving: number;
+  arrived: number;
+  stuck: StuckAgentInfo[];
+}
+
+/** Changing this value intentionally remounts the canvas from App.tsx.
+ * That also replaces a long-lived requestAnimationFrame closure during
+ * Vite Hot Reload, so an old physics engine cannot survive a code update. */
+export const SIMULATION_ENGINE_VERSION = "hybrid-social-force-v6";
+
 export interface TopViewCanvasProps {
   width: number;
   height: number;
@@ -60,9 +87,10 @@ export interface TopViewCanvasProps {
   isPlaying?: boolean;
   agentSpeed?: number;
   onAgentCountChange?: (count: number) => void;
+  onSimulationStatsChange?: (stats: SimulationStats) => void;
 }
 
-const RESPAWN_CHECK_INTERVAL_MS = 250;
+const DENSITY_CHECK_INTERVAL_MS = 250;
 
 export function TopViewCanvas({
   width,
@@ -80,6 +108,7 @@ export function TopViewCanvas({
   isPlaying = false,
   agentSpeed = AGENT_MAX_SPEED,
   onAgentCountChange,
+  onSimulationStatsChange,
 }: TopViewCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const positionsRef = useRef<Map<string, Point>>(new Map(nodePositions));
@@ -90,6 +119,11 @@ export function TopViewCanvas({
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  const onSimulationStatsChangeRef = useRef(onSimulationStatsChange);
+  useEffect(() => {
+    onSimulationStatsChangeRef.current = onSimulationStatsChange;
+  }, [onSimulationStatsChange]);
 
   const propsRef = useRef({ corridors, hubs, orientedEdges, showGraphOverlay, nodeIds, edges, agentSpeed });
   useEffect(() => {
@@ -104,6 +138,9 @@ export function TopViewCanvas({
   const nextAgentIndexRef = useRef(0);
   const lastAddRequestIdRef = useRef<number | null>(null);
   const lastValidPositionsRef = useRef<Map<string, Point>>(new Map());
+  /** Agents still owed to the population from "Add" clicks, drained a few at
+   * a time by the tick loop instead of spawned all at once. */
+  const pendingAddCountRef = useRef(0);
 
   // Keep the live-drag ref in sync whenever the committed prop changes
   // (e.g. after "Generate Paths" recomputes a layout, or a drag commits).
@@ -122,6 +159,7 @@ export function TopViewCanvas({
       physicsWorldRef.current = null;
       agentsRef.current = [];
       simulationConfigRef.current = null;
+      pendingAddCountRef.current = 0;
       return;
     }
     const isNewGeneration = simulationConfigRef.current?.generation !== simulation.generation;
@@ -137,52 +175,28 @@ export function TopViewCanvas({
     physicsWorldRef.current = world;
     nextAgentIndexRef.current = 0;
     lastValidPositionsRef.current.clear();
+    pendingAddCountRef.current = 0;
 
-    const agents: AgentRuntimeState[] = [];
-    for (let i = 0; i < simulation.agentCount; i++) {
-      const agent = spawnAgent(`agent-${nextAgentIndexRef.current++}`, {
-        world,
-        nodePositions: nodePositionsForSimRef.current,
-        adjacency: simulation.adjacency,
-        nodeIds,
-        leaves: simulation.leaves,
-        lastValidPositions: lastValidPositionsRef.current,
-      });
-      if (agent) agents.push(agent);
-    }
-    agentsRef.current = agents;
-    onAgentCountChange?.(agents.length);
+    // Initial population uses the same paced queue as later "Add" clicks.
+    // Spawning a large population at once creates a physically impossible
+    // pile at a handful of leaf nodes and is the main source of persistent
+    // entrance jams.
+    agentsRef.current = [];
+    pendingAddCountRef.current = simulation.agentCount;
+    onAgentCountChange?.(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [simulation, corridors, hubs, nodeIds]);
 
-  // Spawn additional agents into the CURRENT running world/population
+  // Queue additional agents for the CURRENT running world/population
   // whenever the user clicks "Add" - independent of the full
   // generation-reset above, so adding people doesn't restart everyone
-  // already mid-corridor.
+  // already mid-corridor. The tick loop below drains this queue a few
+  // agents at a time instead of spawning the whole batch in one frame.
   useEffect(() => {
     if (!addAgentsRequest) return;
     if (lastAddRequestIdRef.current === addAgentsRequest.requestId) return;
     lastAddRequestIdRef.current = addAgentsRequest.requestId;
-
-    const world = physicsWorldRef.current;
-    const config = simulationConfigRef.current;
-    if (!world || !config) return;
-
-    const added: AgentRuntimeState[] = [];
-    for (let i = 0; i < addAgentsRequest.count; i++) {
-      const agent = spawnAgent(`agent-${nextAgentIndexRef.current++}`, {
-        world,
-        nodePositions: nodePositionsForSimRef.current,
-        adjacency: config.adjacency,
-        nodeIds: propsRef.current.nodeIds,
-        leaves: config.leaves,
-        lastValidPositions: lastValidPositionsRef.current,
-      });
-      if (agent) added.push(agent);
-    }
-    agentsRef.current = [...agentsRef.current, ...added];
-    onAgentCountChange?.(agentsRef.current.length);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    pendingAddCountRef.current += addAgentsRequest.count;
   }, [addAgentsRequest]);
 
   // Rebuild wall bodies (without respawning agents) whenever the corridor
@@ -217,8 +231,18 @@ export function TopViewCanvas({
     }
     const world = physicsWorldRef.current;
     if (world && world.agents.size > 0) {
-      const agentPositions = Array.from(world.agents.values()).map((a) => a.position);
-      drawAgents(ctx, agentPositions, AGENT_RADIUS);
+      const stateById = new Map(agentsRef.current.map((agent) => [agent.id, agent]));
+      const agentVisuals = Array.from(world.agents.values()).map((agent) => ({
+        ...agent.position,
+        id: agent.id,
+        vx: agent.velocity.x,
+        vy: agent.velocity.y,
+        targetLabel: stateById.get(agent.id)?.targetLeaf ?? "?",
+        isStuck:
+          (stateById.get(agent.id)?.stuckTicks ?? 0) >=
+          STUCK_PATIENCE_TICKS + STUCK_RAMP_TICKS,
+      }));
+      drawAgents(ctx, agentVisuals, AGENT_RADIUS);
     }
   }
 
@@ -230,7 +254,8 @@ export function TopViewCanvas({
     let raf: number;
     let acc = 0;
     let last = performance.now();
-    let lastRespawnCheck = 0;
+    let lastDensityCheck = 0;
+    let lastAddBatchCheck = 0;
 
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
@@ -238,6 +263,34 @@ export function TopViewCanvas({
       last = now;
 
       const world = physicsWorldRef.current;
+
+      // Drain the "Add" queue a few agents at a time on a fixed interval,
+      // independent of isPlaying, so a paused sim still grows its
+      // population once resumed instead of losing the request.
+      if (world && simulationConfigRef.current) {
+        lastAddBatchCheck += delta;
+        if (lastAddBatchCheck >= ADD_AGENTS_BATCH_INTERVAL_MS && pendingAddCountRef.current > 0) {
+          lastAddBatchCheck = 0;
+          const config = simulationConfigRef.current;
+          const batchSize = Math.min(ADD_AGENTS_BATCH_SIZE, pendingAddCountRef.current);
+          const added: AgentRuntimeState[] = [];
+          for (let i = 0; i < batchSize; i++) {
+            const agent = spawnAgent(`agent-${nextAgentIndexRef.current++}`, {
+              world,
+              nodePositions: nodePositionsForSimRef.current,
+              adjacency: config.adjacency,
+              nodeIds: propsRef.current.nodeIds,
+              leaves: config.leaves,
+              lastValidPositions: lastValidPositionsRef.current,
+            });
+            if (agent) added.push(agent);
+          }
+          pendingAddCountRef.current -= batchSize;
+          agentsRef.current = [...agentsRef.current, ...added];
+          onAgentCountChange?.(agentsRef.current.length);
+        }
+      }
+
       if (isPlayingRef.current && world) {
         acc += delta;
         // Steering (incl. waypoint-arrival checks) runs inside the same
@@ -246,23 +299,9 @@ export function TopViewCanvas({
         // distance before the next arrival check, which reads as the agent
         // suddenly reversing direction.
         while (acc >= FIXED_DT_MS) {
-          const desired = computeDesiredDirections(agentsRef.current, world, propsRef.current.agentSpeed);
-          stepSocialForce(world, desired, FIXED_DT_MS, propsRef.current.agentSpeed);
-          enforceContainment(
-            world,
-            propsRef.current.corridors,
-            propsRef.current.hubs,
-            lastValidPositionsRef.current
-          );
-          acc -= FIXED_DT_MS;
-        }
-
-        lastRespawnCheck += delta;
-        if (lastRespawnCheck >= RESPAWN_CHECK_INTERVAL_MS) {
-          lastRespawnCheck = 0;
           if (simulationConfigRef.current) {
             const config = simulationConfigRef.current;
-            agentsRef.current = respawnArrivedAgents(agentsRef.current, {
+            agentsRef.current = continueArrivedAgents(agentsRef.current, {
               world,
               nodePositions: nodePositionsForSimRef.current,
               adjacency: config.adjacency,
@@ -271,8 +310,37 @@ export function TopViewCanvas({
               lastValidPositions: lastValidPositionsRef.current,
             });
           }
+          const desired = computeDesiredDirections(agentsRef.current, world, propsRef.current.agentSpeed);
+          stepSocialForce(world, desired, FIXED_DT_MS, propsRef.current.agentSpeed);
+          constrainAgentsToRoutes(agentsRef.current, world);
+          acc -= FIXED_DT_MS;
+        }
+
+        lastDensityCheck += delta;
+        if (lastDensityCheck >= DENSITY_CHECK_INTERVAL_MS) {
+          lastDensityCheck = 0;
           const agentPositions = Array.from(world.agents.values()).map((a) => a.position);
           densityByCorridorRef.current = computeCorridorOccupancy(propsRef.current.corridors, agentPositions);
+
+          const severeStuckTicks = STUCK_PATIENCE_TICKS + STUCK_RAMP_TICKS;
+          const stuck = agentsRef.current
+            .filter((agent) => (agent.stuckTicks ?? 0) >= severeStuckTicks)
+            .map((agent) => {
+              const body = world.agents.get(agent.id);
+              return {
+                id: agent.id,
+                target: agent.targetLeaf,
+                waypoint: agent.waypointIndex,
+                stuckSeconds: (agent.stuckTicks ?? 0) / 60,
+                x: body?.position.x ?? 0,
+                y: body?.position.y ?? 0,
+              };
+            });
+          onSimulationStatsChangeRef.current?.({
+            moving: agentsRef.current.filter((agent) => agent.state === "moving").length,
+            arrived: agentsRef.current.filter((agent) => agent.state === "arrived").length,
+            stuck,
+          });
         }
       }
       draw();

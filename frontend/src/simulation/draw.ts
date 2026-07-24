@@ -142,20 +142,56 @@ export function drawOrientedArrows(
 
 export function drawAgents(
   ctx: CanvasRenderingContext2D,
-  agentPositions: { x: number; y: number }[],
+  agentPositions: {
+    x: number;
+    y: number;
+    vx?: number;
+    vy?: number;
+    id?: string;
+    targetLabel?: string;
+    isStuck?: boolean;
+  }[],
   radius: number
 ): void {
   ctx.save();
-  ctx.fillStyle = "#ffe66d";
-  ctx.strokeStyle = "rgba(15, 17, 21, 0.6)";
-  ctx.lineWidth = 1;
   for (const p of agentPositions) {
+    const targetColor = p.isStuck ? "#ff3b30" : colorForLabel(p.targetLabel ?? "");
+    ctx.fillStyle = "#ffe66d";
+    ctx.strokeStyle = targetColor;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+
+    const speed = Math.hypot(p.vx ?? 0, p.vy ?? 0);
+    if (speed > 0.5) {
+      const ux = (p.vx ?? 0) / speed;
+      const uy = (p.vy ?? 0) / speed;
+      ctx.strokeStyle = "#111827";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + ux * (radius + 4), p.y + uy * (radius + 4));
+      ctx.stroke();
+    }
+
+    if (p.targetLabel) {
+      ctx.font = "bold 9px system-ui, sans-serif";
+      ctx.fillStyle = targetColor;
+      const label = p.isStuck && p.id ? `${p.id} → ${p.targetLabel}` : p.targetLabel;
+      ctx.fillText(label, p.x + radius + 3, p.y - radius - 2);
+    }
   }
   ctx.restore();
+}
+
+function colorForLabel(label: string): string {
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) {
+    hash = (hash * 31 + label.charCodeAt(i)) | 0;
+  }
+  return `hsl(${Math.abs(hash) % 360} 82% 66%)`;
 }
 
 export function hitTestNode(

@@ -52,6 +52,30 @@ describe("driving force", () => {
     runSeconds(world, new Map(), 3 * SFM_TAU, 25);
     expect(Math.abs(agent.velocity.x)).toBeLessThan(0.05 * 25);
   });
+
+  it("preserves a minimum forward route speed after Social Force acceleration", () => {
+    const world = createSfmWorld();
+    const agent = addAgent(world, "a", 0, 0);
+    agent.velocity.x = -50;
+    const desired = new Map<string, DesiredMotion>([
+      [
+        "a",
+        {
+          ex: 1,
+          ey: 0,
+          speed: 25,
+          minForwardSpeed: 10,
+        },
+      ],
+    ]);
+
+    stepSocialForce(world, desired, FIXED_DT_MS, 25);
+
+    expect(agent.velocity.x).toBeGreaterThanOrEqual(10);
+    expect(agent.position.x).toBeGreaterThanOrEqual(
+      (10 * FIXED_DT_MS) / 1000 - 1e-9
+    );
+  });
 });
 
 describe("agent-agent repulsion", () => {

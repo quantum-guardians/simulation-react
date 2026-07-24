@@ -2,15 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   buildAdjacency,
   computeDesiredDirections,
+  constrainAgentsToRoutes,
+  continueArrivedAgents,
   enforceContainment,
   orientedEdgesToLookup,
   pickRandomEndpointPair,
   shortestPath,
+  stepRouteMotion,
   type AgentRuntimeState,
 } from "./agents";
 import { buildCorridors } from "./corridors";
 import type { Point } from "./graph";
-import { addAgent, createSfmWorld } from "./socialForce";
+import { addAgent, createSfmWorld, FIXED_DT_MS, stepSocialForce } from "./socialForce";
 
 describe("shortestPath (Dijkstra)", () => {
   // Diamond: a-b-d costs 1+1=2, a-c-d costs 5+5=10 -> cheaper route via b.
@@ -123,7 +126,7 @@ describe("computeDesiredDirections", () => {
     const motion = desired.get("agent-1");
     expect(motion).toBeDefined();
     expect(motion!.ex).toBeCloseTo(1);
-    expect(motion!.ey).toBeCloseTo(0);
+    expect(motion!.ey).toBeGreaterThan(0);
     expect(motion!.speed).toBe(60);
   });
 
@@ -146,7 +149,7 @@ describe("computeDesiredDirections", () => {
     const desired = computeDesiredDirections([agent], world, 25, 10);
     const motion = desired.get("agent-3");
     expect(motion).toBeDefined();
-    expect(motion!.ex).toBeCloseTo(0);
+    expect(motion!.ex).toBeLessThan(0);
     expect(motion!.ey).toBeCloseTo(1);
   });
 
@@ -169,6 +172,172 @@ describe("computeDesiredDirections", () => {
     const desired = computeDesiredDirections([agent], world, 60, 10);
     expect(agent.state).toBe("arrived");
     expect(desired.has("agent-2")).toBe(false);
+  });
+
+  it("advances after crossing a waypoint even when pushed outside its arrival radius", () => {
+    const world = createSfmWorld();
+    addAgent(world, "overshot", 65, 0);
+
+    const agent: AgentRuntimeState = {
+      id: "overshot",
+      waypoints: [
+        { x: 0, y: 0 },
+        { x: 50, y: 0 },
+        { x: 50, y: 100 },
+      ],
+      waypointIndex: 1,
+      startLeaf: "a",
+      targetLeaf: "c",
+      state: "moving",
+    };
+
+    const desired = computeDesiredDirections([agent], world, 25, 10);
+
+    expect(agent.waypointIndex).toBe(2);
+    expect(desired.get("overshot")?.ex).toBeLessThan(0);
+    expect(desired.get("overshot")?.ey).toBeGreaterThan(0);
+  });
+
+  it("uses a consistent right-hand escape direction after a sustained stall", () => {
+    const world = createSfmWorld();
+    addAgent(world, "stalled", 0, 0);
+    const agent: AgentRuntimeState = {
+      id: "stalled",
+      waypoints: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+      ],
+      waypointIndex: 1,
+      startLeaf: "a",
+      targetLeaf: "b",
+      state: "moving",
+      stuckTicks: 91,
+      lastWaypointDistance: 100,
+    };
+
+    const desired = computeDesiredDirections([agent], world, 25, 10);
+    const motion = desired.get("stalled");
+
+    expect(motion).toBeDefined();
+    expect(motion!.ex).toBeGreaterThan(0);
+    expect(motion!.ey).toBeGreaterThan(0);
+    expect(motion!.speed).toBeGreaterThan(25);
+  });
+
+  it("separates opposite directions onto opposite physical lanes", () => {
+    const world = createSfmWorld();
+    addAgent(world, "eastbound", 20, 0);
+    addAgent(world, "westbound", 80, 0);
+    const eastbound: AgentRuntimeState = {
+      id: "eastbound",
+      waypoints: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+      waypointIndex: 1,
+      startLeaf: "a",
+      targetLeaf: "b",
+      state: "moving",
+    };
+    const westbound: AgentRuntimeState = {
+      id: "westbound",
+      waypoints: [{ x: 100, y: 0 }, { x: 0, y: 0 }],
+      waypointIndex: 1,
+      startLeaf: "b",
+      targetLeaf: "a",
+      state: "moving",
+    };
+
+    const desired = computeDesiredDirections([eastbound, westbound], world, 25, 10);
+
+    expect(desired.get("eastbound")!.ey).toBeGreaterThan(0);
+    expect(desired.get("westbound")!.ey).toBeLessThan(0);
+  });
+
+  it("lets two head-on agents pass each other in a narrow corridor", () => {
+    const world = createSfmWorld();
+    world.walls = [
+      { a: { x: 0, y: -15 }, b: { x: 200, y: -15 } },
+      { a: { x: 0, y: 15 }, b: { x: 200, y: 15 } },
+    ];
+    const east = addAgent(world, "east", 25, 0);
+    const west = addAgent(world, "west", 175, 0);
+    const states: AgentRuntimeState[] = [
+      {
+        id: "east",
+        waypoints: [{ x: 0, y: 0 }, { x: 200, y: 0 }],
+        waypointIndex: 1,
+        startLeaf: "a",
+        targetLeaf: "b",
+        state: "moving",
+      },
+      {
+        id: "west",
+        waypoints: [{ x: 200, y: 0 }, { x: 0, y: 0 }],
+        waypointIndex: 1,
+        startLeaf: "b",
+        targetLeaf: "a",
+        state: "moving",
+      },
+    ];
+
+    for (let tick = 0; tick < 12 * 60; tick++) {
+      const desired = computeDesiredDirections(states, world, 25, 10);
+      stepSocialForce(world, desired, FIXED_DT_MS, 25);
+    }
+
+    expect(east.position.x).toBeGreaterThan(west.position.x);
+    expect(east.position.x).toBeGreaterThan(150);
+    expect(west.position.x).toBeLessThan(50);
+    expect(Math.hypot(
+      east.position.x - west.position.x,
+      east.position.y - west.position.y
+    )).toBeGreaterThanOrEqual(east.radius + west.radius - 0.5);
+  });
+
+  it("keeps two opposing queues flowing through a narrow corridor", () => {
+    const world = createSfmWorld();
+    world.walls = [
+      { a: { x: 0, y: -15 }, b: { x: 240, y: -15 } },
+      { a: { x: 0, y: 15 }, b: { x: 240, y: 15 } },
+    ];
+    const states: AgentRuntimeState[] = [];
+    const eastIds: string[] = [];
+    const westIds: string[] = [];
+
+    for (let i = 0; i < 4; i++) {
+      const eastId = `east-${i}`;
+      const westId = `west-${i}`;
+      eastIds.push(eastId);
+      westIds.push(westId);
+      addAgent(world, eastId, 20 + i * 14, 0);
+      addAgent(world, westId, 220 - i * 14, 0);
+      states.push(
+        {
+          id: eastId,
+          waypoints: [{ x: 0, y: 0 }, { x: 240, y: 0 }],
+          waypointIndex: 1,
+          startLeaf: "a",
+          targetLeaf: "b",
+          state: "moving",
+        },
+        {
+          id: westId,
+          waypoints: [{ x: 240, y: 0 }, { x: 0, y: 0 }],
+          waypointIndex: 1,
+          startLeaf: "b",
+          targetLeaf: "a",
+          state: "moving",
+        }
+      );
+    }
+
+    for (let tick = 0; tick < 20 * 60; tick++) {
+      const desired = computeDesiredDirections(states, world, 25, 10);
+      stepSocialForce(world, desired, FIXED_DT_MS, 25);
+    }
+
+    const eastPositions = eastIds.map((id) => world.agents.get(id)!.position.x);
+    const westPositions = westIds.map((id) => world.agents.get(id)!.position.x);
+    expect(Math.min(...eastPositions)).toBeGreaterThan(120);
+    expect(Math.max(...westPositions)).toBeLessThan(120);
   });
 });
 
@@ -219,5 +388,88 @@ describe("enforceContainment", () => {
     enforceContainment(world, corridors, hubs, lastValid);
     expect(agent.position.x).toBe(500);
     expect(agent.position.y).toBe(500);
+  });
+});
+
+describe("continueArrivedAgents", () => {
+  it("assigns the next reachable destination without teleporting", () => {
+    const world = createSfmWorld();
+    const body = addAgent(world, "traveler", 100, 0);
+    body.velocity.x = 12;
+    const adjacency = buildAdjacency(
+      ["a", "b", "c"],
+      [
+        { source: "a", target: "b", weight: 1 },
+        { source: "b", target: "c", weight: 1 },
+      ]
+    );
+    const state: AgentRuntimeState = {
+      id: "traveler",
+      waypoints: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+      waypointIndex: 1,
+      startLeaf: "a",
+      targetLeaf: "b",
+      state: "arrived",
+    };
+
+    const result = continueArrivedAgents(
+      [state],
+      {
+        world,
+        nodePositions: new Map([
+          ["a", { x: 0, y: 0 }],
+          ["b", { x: 100, y: 0 }],
+          ["c", { x: 200, y: 0 }],
+        ]),
+        adjacency,
+        nodeIds: ["a", "b", "c"],
+        leaves: ["a", "c"],
+        rng: () => 0.99,
+      },
+      1
+    );
+
+    expect(result[0]).toBe(state);
+    expect(state.state).toBe("moving");
+    expect(state.startLeaf).toBe("b");
+    expect(state.targetLeaf).toBe("c");
+    expect(state.waypoints).toEqual([{ x: 100, y: 0 }, { x: 200, y: 0 }]);
+    expect(world.agents.get("traveler")?.position).toEqual({ x: 100, y: 0 });
+    expect(world.agents.get("traveler")?.velocity.x).toBe(12);
+  });
+});
+
+describe("stepRouteMotion", () => {
+  it("guarantees forward progress for every agent with a route motion", () => {
+    const world = createSfmWorld();
+    const body = addAgent(world, "moving", 10, 20);
+    stepRouteMotion(
+      world,
+      new Map([["moving", { ex: 1, ey: 0, speed: 30 }]]),
+      1000
+    );
+
+    expect(body.position).toEqual({ x: 40, y: 20 });
+    expect(body.velocity).toEqual({ x: 30, y: 0 });
+  });
+});
+
+describe("constrainAgentsToRoutes", () => {
+  it("pulls an escaped body back near its current lane without resetting progress", () => {
+    const world = createSfmWorld();
+    const body = addAgent(world, "escaped", 60, 100);
+    const state: AgentRuntimeState = {
+      id: "escaped",
+      waypoints: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+      waypointIndex: 1,
+      startLeaf: "a",
+      targetLeaf: "b",
+      state: "moving",
+    };
+
+    constrainAgentsToRoutes([state], world, 8);
+
+    expect(body.position.x).toBeCloseTo(60);
+    expect(body.position.y).toBeCloseTo(13);
   });
 });

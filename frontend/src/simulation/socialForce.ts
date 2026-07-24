@@ -10,6 +10,7 @@ import {
   AGENT_RADIUS,
   SFM_A_AGENT,
   SFM_A_WALL,
+  SFM_ANISOTROPY_LAMBDA,
   SFM_B_AGENT,
   SFM_B_WALL,
   SFM_CUTOFF_FACTOR,
@@ -27,10 +28,12 @@ import {
  *  - a driving force relaxing its velocity toward `desired speed × desired
  *    direction` over SFM_TAU seconds;
  *  - social repulsion from nearby agents, exponential in the gap
- *    (A·exp((r_ij − d)/B)·n), plus — only while bodies actually overlap —
- *    a body-contact spring (k·g·n) and tangential sliding friction
- *    (κ·g·Δv_t·t), the Helbing (2000) granular terms that make dense crowds
- *    shove and squeeze realistically;
+ *    (A·exp((r_ij − d)/B)·n), weighted per-agent by an anisotropic factor
+ *    (full strength ahead, SFM_ANISOTROPY_LAMBDA behind - see presets.ts)
+ *    so nobody dodges what's behind them as hard as what's ahead, plus —
+ *    only while bodies actually overlap — a body-contact spring (k·g·n)
+ *    and tangential sliding friction (κ·g·Δv_t·t), the Helbing (2000)
+ *    granular terms that make dense crowds shove and squeeze realistically;
  *  - the same repulsion/contact terms from the nearest point of each wall
  *    segment.
  *
@@ -57,6 +60,11 @@ export interface DesiredMotion {
   ex: number;
   ey: number;
   speed: number;
+  /** Route-priority floor applied after all Social Force acceleration. */
+  minForwardSpeed?: number;
+  /** Multiplier for long-range agent repulsion. Contact forces are never
+   * scaled, so values below 1 help break a jam without allowing overlap. */
+  socialScale?: number;
 }
 
 export const FIXED_DT_MS = 1000 / 60;
@@ -78,7 +86,15 @@ export function createSfmWorld(): SfmWorld {
 /** Replaces the wall set from the current corridor floor plan. Cheap (plain
  * arrays), safe to call on every floor-plan edit. */
 export function rebuildWalls(world: SfmWorld, corridors: Corridor[], hubs: JunctionHub[]): void {
-  world.walls = buildWallSegments(corridors, hubs);
+  // Hub-rim chords look like a safe enclosure, but their endpoints create
+  // tiny collision wedges exactly where a directed lane enters a corridor.
+  // Under pressure, agents become permanently pinned in those wedges. The
+  // hard walkable-area containment pass already prevents escapes from hub
+  // disks, so runtime physics only needs the two side walls of each
+  // corridor. Keep `hubs` in the signature because callers rebuild both
+  // parts of the floor plan together.
+  void hubs;
+  world.walls = buildWallSegments(corridors, []);
 }
 
 export function addAgent(
@@ -136,7 +152,23 @@ const MAX_OVERLAP_CORRECTION_PX = 2.5;
  * MAX_OVERLAP_CORRECTION_PX. Symmetric per pair, so it preserves the
  * model's momentum symmetry.
  */
-function resolveAgentOverlaps(agents: SfmAgent[]): void {
+function effectiveInteractionRadius(
+  agent: SfmAgent,
+  desired: Map<string, DesiredMotion>
+): number {
+  const socialScale = desired.get(agent.id)?.socialScale ?? 1;
+  // A fully jammed pedestrian temporarily becomes a "ghost" only to other
+  // pedestrians. Its full radius is still used for every wall collision,
+  // so deadlock recovery cannot tunnel through the corridor boundary. As
+  // soon as forward progress resumes, socialScale rises and the normal
+  // collision radius returns.
+  return agent.radius * socialScale;
+}
+
+function resolveAgentOverlaps(
+  agents: SfmAgent[],
+  desired: Map<string, DesiredMotion>
+): void {
   const n = agents.length;
   const pushX = new Float64Array(n);
   const pushY = new Float64Array(n);
@@ -145,7 +177,9 @@ function resolveAgentOverlaps(agents: SfmAgent[]): void {
     const ai = agents[i];
     for (let j = i + 1; j < n; j++) {
       const aj = agents[j];
-      const rij = ai.radius + aj.radius;
+      const rij =
+        effectiveInteractionRadius(ai, desired) +
+        effectiveInteractionRadius(aj, desired);
       let dx = ai.position.x - aj.position.x;
       let dy = ai.position.y - aj.position.y;
       if (dx > rij || dx < -rij || dy > rij || dy < -rij) continue;
@@ -301,7 +335,9 @@ export function stepSocialForce(
       const ai = agents[i];
       for (let j = i + 1; j < n; j++) {
         const aj = agents[j];
-        const rij = ai.radius + aj.radius;
+        const rij =
+          effectiveInteractionRadius(ai, desired) +
+          effectiveInteractionRadius(aj, desired);
         const cutoff = rij + agentCutoff;
         let dx = ai.position.x - aj.position.x;
         let dy = ai.position.y - aj.position.y;
@@ -319,27 +355,59 @@ export function stepSocialForce(
         const nx = dx / dist;
         const ny = dy / dist;
 
-        let fx = SFM_A_AGENT * Math.exp((rij - dist) / SFM_B_AGENT) * nx;
-        let fy = SFM_A_AGENT * Math.exp((rij - dist) / SFM_B_AGENT) * ny;
+        // Anisotropic weighting of the long-range social term only: each
+        // agent perceives the other relative to its own facing (nx, ny
+        // points from j to i). Full strength ahead, SFM_ANISOTROPY_LAMBDA
+        // behind. Agents with no desired motion (e.g. arrived) stay
+        // isotropic. The hard body-contact spring/friction below is
+        // deliberately left unweighted - actual touch is felt regardless of
+        // facing, and asymmetric weighting there would let a "blind side"
+        // approach interpenetrate.
+        const social = SFM_A_AGENT * Math.exp((rij - dist) / SFM_B_AGENT);
+        const di = desired.get(ai.id);
+        const dj = desired.get(aj.id);
+        const wi = di
+          ? SFM_ANISOTROPY_LAMBDA +
+            (1 - SFM_ANISOTROPY_LAMBDA) * (1 - (di.ex * nx + di.ey * ny)) / 2
+          : 1;
+        const wj = dj
+          ? SFM_ANISOTROPY_LAMBDA +
+            (1 - SFM_ANISOTROPY_LAMBDA) * (1 + (dj.ex * nx + dj.ey * ny)) / 2
+          : 1;
+
+        const socialScaleI = di?.socialScale ?? 1;
+        const socialScaleJ = dj?.socialScale ?? 1;
+        let fxi = social * wi * socialScaleI * nx;
+        let fyi = social * wi * socialScaleI * ny;
+        let fxj = -social * wj * socialScaleJ * nx;
+        let fyj = -social * wj * socialScaleJ * ny;
 
         const overlap = rij - dist;
         if (overlap > 0) {
-          fx += SFM_K_BODY * overlap * nx;
-          fy += SFM_K_BODY * overlap * ny;
+          const contactX = SFM_K_BODY * overlap * nx;
+          const contactY = SFM_K_BODY * overlap * ny;
+          fxi += contactX;
+          fyi += contactY;
+          fxj -= contactX;
+          fyj -= contactY;
           // Sliding friction along the tangent t = (-ny, nx).
           const tx = -ny;
           const ty = nx;
           const relTangentialSpeed =
             (aj.velocity.x - ai.velocity.x) * tx + (aj.velocity.y - ai.velocity.y) * ty;
           const coefficient = Math.min(SFM_KAPPA * overlap, maxFrictionCoefficient);
-          fx += coefficient * relTangentialSpeed * tx;
-          fy += coefficient * relTangentialSpeed * ty;
+          const frictionX = coefficient * relTangentialSpeed * tx;
+          const frictionY = coefficient * relTangentialSpeed * ty;
+          fxi += frictionX;
+          fyi += frictionY;
+          fxj -= frictionX;
+          fyj -= frictionY;
         }
 
-        ax[i] += fx;
-        ay[i] += fy;
-        ax[j] -= fx;
-        ay[j] -= fy;
+        ax[i] += fxi;
+        ay[i] += fyi;
+        ax[j] += fxj;
+        ay[j] += fyj;
       }
 
       // Wall forces.
@@ -402,14 +470,47 @@ export function stepSocialForce(
         agent.velocity.y *= scale;
       }
 
+      // Hybrid route guarantee: Social Force still determines lateral
+      // avoidance, spacing, contact and speed above this floor, but it may
+      // not cancel forward route progress forever. This is applied inside
+      // every substep so geometric overlap resolution cannot leave the next
+      // force evaluation starting from a stationary equilibrium.
+      if (motion?.minForwardSpeed !== undefined) {
+        const forwardSpeed =
+          agent.velocity.x * motion.ex + agent.velocity.y * motion.ey;
+        if (forwardSpeed < motion.minForwardSpeed) {
+          const correction = motion.minForwardSpeed - forwardSpeed;
+          agent.velocity.x += correction * motion.ex;
+          agent.velocity.y += correction * motion.ey;
+        }
+      }
+
       agent.position.x += agent.velocity.x * dt;
       agent.position.y += agent.velocity.y * dt;
     }
 
     // Geometric cleanup: pairs first, walls last so walls always win.
-    resolveAgentOverlaps(agents);
+    resolveAgentOverlaps(agents, desired);
     for (let i = 0; i < n; i++) {
       resolveWallCollisions(agents[i], world.walls, previousX[i], previousY[i]);
+    }
+
+    // Overlap correction is positional and can undo the forward velocity
+    // floor applied above. Enforce the same guarantee on actual displacement
+    // after every force/contact/wall phase. This leaves all lateral Social
+    // Force motion intact and only restores missing progress along the route.
+    for (let i = 0; i < n; i++) {
+      const motion = desired.get(agents[i].id);
+      if (motion?.minForwardSpeed === undefined) continue;
+      const forwardDisplacement =
+        (agents[i].position.x - previousX[i]) * motion.ex +
+        (agents[i].position.y - previousY[i]) * motion.ey;
+      const minimumDisplacement = motion.minForwardSpeed * dt;
+      if (forwardDisplacement < minimumDisplacement) {
+        const correction = minimumDisplacement - forwardDisplacement;
+        agents[i].position.x += correction * motion.ex;
+        agents[i].position.y += correction * motion.ey;
+      }
     }
   }
 }

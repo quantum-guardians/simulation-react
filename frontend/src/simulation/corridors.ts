@@ -7,7 +7,7 @@ export interface CorridorWidthOptions {
 }
 
 export const DEFAULT_CORRIDOR_WIDTH_OPTIONS: CorridorWidthOptions = {
-  minWidth: 20,
+  minWidth: 24,
   maxWidth: 100,
   widthScale: 6,
 };

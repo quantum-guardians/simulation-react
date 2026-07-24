@@ -5,7 +5,13 @@ import { SolverPanel } from "./components/SolverPanel";
 import { ScorePanel } from "./components/ScorePanel";
 import { WarningsPanel } from "./components/WarningsPanel";
 import { DensityLegend } from "./components/DensityLegend";
-import { TopViewCanvas, type AddAgentsRequest, type SimulationConfig } from "./components/TopViewCanvas";
+import {
+  TopViewCanvas,
+  SIMULATION_ENGINE_VERSION,
+  type AddAgentsRequest,
+  type SimulationConfig,
+  type SimulationStats,
+} from "./components/TopViewCanvas";
 import {
   computeForceDirectedLayout,
   findLeafNodes,
@@ -41,6 +47,7 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showGraphOverlay, setShowGraphOverlay] = useState(true);
   const [agentCount, setAgentCount] = useState(0);
+  const [simulationStats, setSimulationStats] = useState<SimulationStats | null>(null);
 
   const [solver, setSolver] = useState<SolverType>("mr2s");
   const [isRunningSolver, setIsRunningSolver] = useState(false);
@@ -75,6 +82,7 @@ function App() {
     setOrientedEdges([]);
     setScore(null);
     setSolverWarnings([]);
+    setSimulationStats(null);
     setStage("layout");
   }
 
@@ -188,7 +196,30 @@ function App() {
               disabled={!csvGraph}
             />
           )}
-          {stage === "simulating" && <p>Agents: {agentCount}</p>}
+          {stage === "simulating" && (
+            <div className="simulation-stats">
+              <p>Engine: {SIMULATION_ENGINE_VERSION}</p>
+              <p>
+                Agents: {agentCount}
+                {simulationStats &&
+                  ` · Moving: ${simulationStats.moving} · Stuck: ${simulationStats.stuck.length}`}
+              </p>
+              {simulationStats && simulationStats.stuck.length > 0 && (
+                <details open>
+                  <summary>Stuck agent diagnostics</summary>
+                  <ul>
+                    {simulationStats.stuck.map((agent) => (
+                      <li key={agent.id}>
+                        {agent.id} → {agent.target}, waypoint {agent.waypoint},{" "}
+                        {agent.stuckSeconds.toFixed(1)}s at ({agent.x.toFixed(0)},{" "}
+                        {agent.y.toFixed(0)})
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
           {stage === "simulating" && <DensityLegend />}
           <ScorePanel score={score} />
           <WarningsPanel warnings={allWarnings} />
@@ -196,6 +227,7 @@ function App() {
         <main>
           <div className="canvas-wrapper">
             <TopViewCanvas
+              key={SIMULATION_ENGINE_VERSION}
               width={CANVAS_WIDTH}
               height={CANVAS_HEIGHT}
               nodeIds={csvGraph?.nodeIds ?? []}
@@ -211,6 +243,7 @@ function App() {
               showGraphOverlay={showGraphOverlay}
               orientedEdges={orientedEdges}
               onAgentCountChange={setAgentCount}
+              onSimulationStatsChange={setSimulationStats}
             />
           </div>
           {stage === "input" && <p>Paste a CSV edge list and click "Parse &amp; Layout" to begin.</p>}
