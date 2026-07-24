@@ -13,31 +13,32 @@ CSV로 그래프(간선 목록)를 입력하면 자동 레이아웃 후 노드�
 ## 아키텍처
 
 ```text
-frontend/   React + TypeScript + Vite, 탑뷰 캔버스 + Social Force Model 군중 시뮬레이션
+src/      React 컴포넌트, API 연동, Social Force Model 시뮬레이션
+public/   정적 리소스
+docs/     API 및 백엔드 참고 문서
 ```
 
 간선 방향 최적화 백엔드는 이 저장소에 포함되어 있지 않고, 배포된
 **`https://quantum.yunseong.dev`** (mr2s-backend, FastAPI)를 사용합니다.
-API 명세는 [BACKEND_REFERENCE.md](BACKEND_REFERENCE.md)를 참고하세요.
+API 명세는 [docs/BACKEND_REFERENCE.md](docs/BACKEND_REFERENCE.md)를 참고하세요.
 사용 엔드포인트: `POST /api/v1/mr2s`, `/api/v1/raw-sa`, `/api/v1/brute-force`.
 
 ### 백엔드 연동 방식
 
 - **dev**: 백엔드의 CORS 허용 목록에 localhost가 없으므로, Vite dev 서버의
   proxy(`/mr2s-api` → `https://quantum.yunseong.dev`)를 경유합니다
-  (`frontend/vite.config.ts`). 로컬에서 mr2s-backend를 직접 띄웠다면
+  (`vite.config.ts`). 로컬에서 mr2s-backend를 직접 띄웠다면
   `VITE_PROXY_TARGET=http://localhost:8000`으로 대상을 바꿀 수 있습니다.
 - **prod**: 빌드 시 `VITE_API_BASE_URL=https://quantum.yunseong.dev`를 설정해
   직접 호출합니다. 단, 빌드 결과물을 호스팅하는 오리진이 백엔드의 CORS
   허용 목록(`quantum-guardians.github.io`, `mr2s.vercel.app`,
   `qi4uinpnu.vercel.app`)에 있어야 하며, 새 도메인은 백엔드 `main.py`의
   `allow_origins`에 추가가 필요합니다.
-- 설정 예시는 `frontend/.env.example` 참고.
+- 설정 예시는 `.env.example` 참고.
 
 ## 실행 방법
 
 ```bash
-cd frontend
 npm install
 npm run dev
 ```
@@ -55,9 +56,9 @@ http://localhost:5173
 2. 자동 배치된 노드를 캔버스에서 드래그해 위치를 조정합니다.
 3. "Number of people"에 원하는 인원 수를 직접 입력하고 "Generate Paths"를
    누르면 weight에 비례한 폭의 골목이 생성되고, 입력한 수만큼 사람이 리프
-   노드 사이를 오가며 이동을 시작합니다. Play/Pause로 시뮬레이션을
-   제어하고, 시뮬레이션 도중에도 숫자를 바꾼 뒤 "Add"를 누르면 그만큼
-   사람이 추가로 투입됩니다.
+   노드 사이를 오가며 이동을 시작합니다. Play/Pause와 배속 선택으로
+   시뮬레이션을 제어하고, 시뮬레이션 도중에도 숫자를 바꾼 뒤 "Add"를
+   누르면 그만큼 사람이 추가로 투입됩니다.
 4. Solver(MR2S(QUBO) / Simulated Annealing / Brute Force)를 선택하고
    "Run Solver"를 누르면 방향 화살표와 score(Optimized/Bidirectional APSP)가
    표시됩니다.
@@ -71,7 +72,7 @@ http://localhost:5173
 ## 군중 이동 모델 (Social Force Model)
 
 에이전트 이동은 Helbing & Molnár의 Social Force Model을 따릅니다
-(`frontend/src/simulation/socialForce.ts`):
+(`src/simulation/socialForce.ts`):
 
 - **구동력**: 희망 속도 × 다음 웨이포인트 방향으로 이완 시간 τ에 걸쳐 가속
 - **에이전트 간 반발력**: 거리에 지수적으로 감소하는 사회적 반발 +
@@ -79,13 +80,12 @@ http://localhost:5173
 - **벽 반발력**: 복도 벽/허브 테두리 세그먼트에 대해 동일한 형태의 힘
 
 경로 탐색(웨이포인트)은 solver가 정한 간선 방향을 존중하는 Dijkstra
-최단경로를 사용합니다. 튜닝 상수는 `frontend/src/simulation/presets.ts`에
+최단경로를 사용합니다. 튜닝 상수는 `src/simulation/presets.ts`에
 모여 있습니다.
 
 ## 테스트
 
 ```bash
-cd frontend
 npm run test
 ```
 

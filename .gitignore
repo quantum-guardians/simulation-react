@@ -1,10 +1,29 @@
-# Node / frontend
-frontend/node_modules/
-frontend/dist/
-frontend/node_modules/.tmp/
+# Dependencies and build output
+node_modules/
+dist/
 *.tsbuildinfo
-frontend/.env
-frontend/.env.local
 
-# OS / editor
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
 .DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
