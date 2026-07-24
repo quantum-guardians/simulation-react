@@ -69,7 +69,7 @@ export interface SimulationStats {
 /** Changing this value intentionally remounts the canvas from App.tsx.
  * That also replaces a long-lived requestAnimationFrame closure during
  * Vite Hot Reload, so an old physics engine cannot survive a code update. */
-export const SIMULATION_ENGINE_VERSION = "hybrid-social-force-v6";
+export const SIMULATION_ENGINE_VERSION = "hybrid-social-force-v7";
 
 export interface TopViewCanvasProps {
   width: number;
@@ -86,6 +86,7 @@ export interface TopViewCanvasProps {
   addAgentsRequest?: AddAgentsRequest | null;
   isPlaying?: boolean;
   agentSpeed?: number;
+  playbackRate?: number;
   onAgentCountChange?: (count: number) => void;
   onSimulationStatsChange?: (stats: SimulationStats) => void;
 }
@@ -107,6 +108,7 @@ export function TopViewCanvas({
   addAgentsRequest = null,
   isPlaying = false,
   agentSpeed = AGENT_MAX_SPEED,
+  playbackRate = 1,
   onAgentCountChange,
   onSimulationStatsChange,
 }: TopViewCanvasProps) {
@@ -125,10 +127,37 @@ export function TopViewCanvas({
     onSimulationStatsChangeRef.current = onSimulationStatsChange;
   }, [onSimulationStatsChange]);
 
-  const propsRef = useRef({ corridors, hubs, orientedEdges, showGraphOverlay, nodeIds, edges, agentSpeed });
+  const propsRef = useRef({
+    corridors,
+    hubs,
+    orientedEdges,
+    showGraphOverlay,
+    nodeIds,
+    edges,
+    agentSpeed,
+    playbackRate,
+  });
   useEffect(() => {
-    propsRef.current = { corridors, hubs, orientedEdges, showGraphOverlay, nodeIds, edges, agentSpeed };
-  }, [corridors, hubs, orientedEdges, showGraphOverlay, nodeIds, edges, agentSpeed]);
+    propsRef.current = {
+      corridors,
+      hubs,
+      orientedEdges,
+      showGraphOverlay,
+      nodeIds,
+      edges,
+      agentSpeed,
+      playbackRate,
+    };
+  }, [
+    corridors,
+    hubs,
+    orientedEdges,
+    showGraphOverlay,
+    nodeIds,
+    edges,
+    agentSpeed,
+    playbackRate,
+  ]);
 
   const physicsWorldRef = useRef<SfmWorld | null>(null);
   const agentsRef = useRef<AgentRuntimeState[]>([]);
@@ -292,13 +321,14 @@ export function TopViewCanvas({
       }
 
       if (isPlayingRef.current && world) {
-        acc += delta;
+        acc += delta * propsRef.current.playbackRate;
         // Steering (incl. waypoint-arrival checks) runs inside the same
         // per-tick loop as the physics step, not once per frame - otherwise
         // a slow frame lets an agent overshoot several ticks' worth of
         // distance before the next arrival check, which reads as the agent
         // suddenly reversing direction.
-        while (acc >= FIXED_DT_MS) {
+        let stepsThisFrame = 0;
+        while (acc >= FIXED_DT_MS && stepsThisFrame < 12) {
           if (simulationConfigRef.current) {
             const config = simulationConfigRef.current;
             agentsRef.current = continueArrivedAgents(agentsRef.current, {
@@ -314,7 +344,10 @@ export function TopViewCanvas({
           stepSocialForce(world, desired, FIXED_DT_MS, propsRef.current.agentSpeed);
           constrainAgentsToRoutes(agentsRef.current, world);
           acc -= FIXED_DT_MS;
+          stepsThisFrame++;
         }
+        // Do not attempt to replay a long background-tab pause in one frame.
+        if (stepsThisFrame === 12) acc = Math.min(acc, FIXED_DT_MS);
 
         lastDensityCheck += delta;
         if (lastDensityCheck >= DENSITY_CHECK_INTERVAL_MS) {

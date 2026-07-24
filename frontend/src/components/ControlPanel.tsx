@@ -7,6 +7,8 @@ export interface ControlPanelProps {
   canAddAgents: boolean;
   agentSpeed: number;
   onAgentSpeedChange: (speed: number) => void;
+  playbackRate: number;
+  onPlaybackRateChange: (rate: number) => void;
   isPlaying: boolean;
   onTogglePlay: () => void;
   canPlay: boolean;
@@ -23,6 +25,8 @@ export function ControlPanel({
   canAddAgents,
   agentSpeed,
   onAgentSpeedChange,
+  playbackRate,
+  onPlaybackRateChange,
   isPlaying,
   onTogglePlay,
   canPlay,
@@ -55,6 +59,19 @@ export function ControlPanel({
         value={agentSpeed}
         onChange={(e) => onAgentSpeedChange(Math.max(1, Number(e.target.value) || 1))}
       />
+
+      <label htmlFor="playback-rate-select">Playback speed</label>
+      <select
+        id="playback-rate-select"
+        value={playbackRate}
+        onChange={(e) => onPlaybackRateChange(Number(e.target.value))}
+      >
+        <option value={0.25}>0.25×</option>
+        <option value={0.5}>0.5×</option>
+        <option value={1}>1×</option>
+        <option value={2}>2×</option>
+        <option value={4}>4×</option>
+      </select>
 
       <button type="button" onClick={onGeneratePaths} disabled={!canGeneratePaths}>
         Generate Paths

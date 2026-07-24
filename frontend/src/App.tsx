@@ -42,6 +42,7 @@ function App() {
   const [hubs, setHubs] = useState<JunctionHub[]>([]);
   const [agentCountInput, setAgentCountInput] = useState(DEFAULT_AGENT_COUNT);
   const [agentSpeed, setAgentSpeed] = useState(AGENT_MAX_SPEED);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const [simulation, setSimulation] = useState<SimulationConfig | null>(null);
   const [addAgentsRequest, setAddAgentsRequest] = useState<AddAgentsRequest | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -180,6 +181,8 @@ function App() {
               canAddAgents={stage === "simulating"}
               agentSpeed={agentSpeed}
               onAgentSpeedChange={setAgentSpeed}
+              playbackRate={playbackRate}
+              onPlaybackRateChange={setPlaybackRate}
               isPlaying={isPlaying}
               onTogglePlay={() => setIsPlaying((p) => !p)}
               canPlay={stage === "simulating"}
@@ -239,6 +242,7 @@ function App() {
               simulation={simulation}
               addAgentsRequest={addAgentsRequest}
               agentSpeed={agentSpeed}
+              playbackRate={playbackRate}
               isPlaying={isPlaying}
               showGraphOverlay={showGraphOverlay}
               orientedEdges={orientedEdges}
