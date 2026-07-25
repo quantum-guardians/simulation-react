@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeForceDirectedLayout,
   findLeafNodes,
+  generateRandomConnectedGraphCsv,
   parseEdgeListCsv,
 } from "./graph";
 
@@ -58,6 +59,40 @@ describe("parseEdgeListCsv", () => {
   it("rejects empty input", () => {
     const result = parseEdgeListCsv("   \n  ");
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("generateRandomConnectedGraphCsv", () => {
+  it("generates a valid connected graph with unique weighted edges", () => {
+    let seed = 17;
+    const rng = () => {
+      seed = (seed * 48271) % 2147483647;
+      return seed / 2147483647;
+    };
+    const result = parseEdgeListCsv(generateRandomConnectedGraphCsv(8, rng));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.graph.nodeIds).toHaveLength(8);
+    expect(result.graph.edges.length).toBeGreaterThanOrEqual(7);
+    expect(result.graph.warnings).toEqual([]);
+
+    const visited = new Set<string>([result.graph.nodeIds[0]]);
+    while (true) {
+      const before = visited.size;
+      for (const edge of result.graph.edges) {
+        if (visited.has(edge.source)) visited.add(edge.target);
+        if (visited.has(edge.target)) visited.add(edge.source);
+      }
+      if (visited.size === before) break;
+    }
+    expect(visited.size).toBe(8);
+    expect(result.graph.edges.every((edge) => edge.weight >= 1 && edge.weight <= 5)).toBe(true);
+  });
+
+  it("rejects node counts outside the small-graph range", () => {
+    expect(() => generateRandomConnectedGraphCsv(1)).toThrow(RangeError);
+    expect(() => generateRandomConnectedGraphCsv(13)).toThrow(RangeError);
   });
 });
 

@@ -170,7 +170,7 @@ export interface AgentRuntimeState {
   waypointIndex: number;
   startLeaf: string;
   targetLeaf: string;
-  state: "moving" | "arrived";
+  state: "moving" | "arrived" | "dead";
   /** Multiplier on the base max speed, fixed for this agent's lifetime, so
    * a crowd doesn't all cruise at one identical speed. spawnAgent assigns
    * one in [AGENT_SPEED_VARIANCE_MIN, AGENT_SPEED_VARIANCE_MAX); treated as
@@ -183,6 +183,10 @@ export interface AgentRuntimeState {
    * detect real positional progress instead of trusting velocity, which can
    * be non-zero while collision correction keeps the body in one place. */
   lastWaypointDistance?: number;
+  /** Current normalized crowd-compression estimate. */
+  pressure?: number;
+  /** Consecutive-equivalent physics ticks spent above fatal pressure. */
+  highPressureTicks?: number;
 }
 
 export interface SpawnAgentDeps {
@@ -294,7 +298,7 @@ export function computeDesiredDirections(
   const desired = new Map<string, DesiredMotion>();
 
   for (const agent of agents) {
-    if (agent.state === "arrived") continue;
+    if (agent.state !== "moving") continue;
     const sfmAgent = world.agents.get(agent.id);
     if (!sfmAgent) continue;
 

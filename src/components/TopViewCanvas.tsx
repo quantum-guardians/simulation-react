@@ -29,10 +29,12 @@ import {
   ADD_AGENTS_BATCH_SIZE,
   AGENT_MAX_SPEED,
   AGENT_RADIUS,
+  PRESSURE_DEATH_THRESHOLD,
   STUCK_PATIENCE_TICKS,
   STUCK_RAMP_TICKS,
 } from "../simulation/presets";
 import { computeCorridorOccupancy } from "../simulation/density";
+import { updatePressureDeaths } from "../simulation/pressure";
 import type { OrientedEdge } from "../api/types";
 
 export interface SimulationConfig {
@@ -63,13 +65,15 @@ export interface StuckAgentInfo {
 export interface SimulationStats {
   moving: number;
   arrived: number;
+  dead: number;
+  peakPressure: number;
   stuck: StuckAgentInfo[];
 }
 
 /** Changing this value intentionally remounts the canvas from App.tsx.
  * That also replaces a long-lived requestAnimationFrame closure during
  * Vite Hot Reload, so an old physics engine cannot survive a code update. */
-export const SIMULATION_ENGINE_VERSION = "hybrid-social-force-v7";
+export const SIMULATION_ENGINE_VERSION = "hybrid-social-force-v8-pressure";
 
 export interface TopViewCanvasProps {
   width: number;
@@ -267,7 +271,13 @@ export function TopViewCanvas({
         vx: agent.velocity.x,
         vy: agent.velocity.y,
         targetLabel: stateById.get(agent.id)?.targetLeaf ?? "?",
+        isDead: stateById.get(agent.id)?.state === "dead",
+        pressureRatio: Math.min(
+          1,
+          (stateById.get(agent.id)?.pressure ?? 0) / PRESSURE_DEATH_THRESHOLD
+        ),
         isStuck:
+          stateById.get(agent.id)?.state === "moving" &&
           (stateById.get(agent.id)?.stuckTicks ?? 0) >=
           STUCK_PATIENCE_TICKS + STUCK_RAMP_TICKS,
       }));
@@ -343,6 +353,7 @@ export function TopViewCanvas({
           const desired = computeDesiredDirections(agentsRef.current, world, propsRef.current.agentSpeed);
           stepSocialForce(world, desired, FIXED_DT_MS, propsRef.current.agentSpeed);
           constrainAgentsToRoutes(agentsRef.current, world);
+          updatePressureDeaths(agentsRef.current, world);
           acc -= FIXED_DT_MS;
           stepsThisFrame++;
         }
@@ -357,7 +368,10 @@ export function TopViewCanvas({
 
           const severeStuckTicks = STUCK_PATIENCE_TICKS + STUCK_RAMP_TICKS;
           const stuck = agentsRef.current
-            .filter((agent) => (agent.stuckTicks ?? 0) >= severeStuckTicks)
+            .filter(
+              (agent) =>
+                agent.state === "moving" && (agent.stuckTicks ?? 0) >= severeStuckTicks
+            )
             .map((agent) => {
               const body = world.agents.get(agent.id);
               return {
@@ -372,6 +386,11 @@ export function TopViewCanvas({
           onSimulationStatsChangeRef.current?.({
             moving: agentsRef.current.filter((agent) => agent.state === "moving").length,
             arrived: agentsRef.current.filter((agent) => agent.state === "arrived").length,
+            dead: agentsRef.current.filter((agent) => agent.state === "dead").length,
+            peakPressure: agentsRef.current.reduce(
+              (maximum, agent) => Math.max(maximum, agent.pressure ?? 0),
+              0
+            ),
             stuck,
           });
         }

@@ -150,22 +150,38 @@ export function drawAgents(
     id?: string;
     targetLabel?: string;
     isStuck?: boolean;
+    isDead?: boolean;
+    pressureRatio?: number;
   }[],
   radius: number
 ): void {
   ctx.save();
   for (const p of agentPositions) {
     const targetColor = p.isStuck ? "#ff3b30" : colorForLabel(p.targetLabel ?? "");
-    ctx.fillStyle = "#ffe66d";
-    ctx.strokeStyle = targetColor;
+    const pressureRatio = Math.max(0, Math.min(1, p.pressureRatio ?? 0));
+    ctx.fillStyle = p.isDead
+      ? "#291b1d"
+      : `hsl(${48 * (1 - pressureRatio)} 92% ${62 - pressureRatio * 8}%)`;
+    ctx.strokeStyle = p.isDead ? "#ff3b30" : targetColor;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
+    if (p.isDead) {
+      ctx.strokeStyle = "#ff3b30";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(p.x - radius * 0.55, p.y - radius * 0.55);
+      ctx.lineTo(p.x + radius * 0.55, p.y + radius * 0.55);
+      ctx.moveTo(p.x + radius * 0.55, p.y - radius * 0.55);
+      ctx.lineTo(p.x - radius * 0.55, p.y + radius * 0.55);
+      ctx.stroke();
+    }
+
     const speed = Math.hypot(p.vx ?? 0, p.vy ?? 0);
-    if (speed > 0.5) {
+    if (!p.isDead && speed > 0.5) {
       const ux = (p.vx ?? 0) / speed;
       const uy = (p.vy ?? 0) / speed;
       ctx.strokeStyle = "#111827";
@@ -176,10 +192,11 @@ export function drawAgents(
       ctx.stroke();
     }
 
-    if (p.targetLabel) {
+    if (p.targetLabel && !p.isDead) {
       ctx.font = "bold 9px system-ui, sans-serif";
       ctx.fillStyle = targetColor;
-      const label = p.isStuck && p.id ? `${p.id} → ${p.targetLabel}` : p.targetLabel;
+      const label =
+        p.isStuck && p.id ? `${p.id} → ${p.targetLabel}` : p.targetLabel;
       ctx.fillText(label, p.x + radius + 3, p.y - radius - 2);
     }
   }

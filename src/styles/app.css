@@ -162,6 +162,26 @@ body {
   cursor: pointer;
 }
 
+.random-graph-row {
+  display: grid;
+  grid-template-columns: 1fr 64px auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.random-graph-row input {
+  width: 64px;
+  background: #1c1f26;
+  color: #e8eaf0;
+  border: 1px solid #2a2e38;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.random-graph-row button {
+  align-self: stretch;
+}
+
 .csv-errors {
   color: #ef476f;
   font-size: 12px;

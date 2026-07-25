@@ -128,6 +128,22 @@ export const STUCK_BOOST_MAX = 1;
  * social-force equilibrium without ever passing through another body. */
 export const STUCK_SOCIAL_FORCE_MIN = 0;
 
+// ---------------------------------------------------------------------------
+// Crowd-pressure injury model.
+// ---------------------------------------------------------------------------
+
+/** Distance beyond physical contact over which compression starts building. */
+export const PRESSURE_CONTACT_RANGE_PX = 3;
+
+/** Normalized simultaneous compression needed to start fatal exposure. */
+export const PRESSURE_DEATH_THRESHOLD = 3.5;
+
+/** Sustained simulated seconds above the threshold before an agent dies. */
+export const PRESSURE_DEATH_SECONDS = 3;
+
+/** Exposure recovers this many times faster than it accumulates. */
+export const PRESSURE_RECOVERY_RATE = 3;
+
 /** Maximum random deviation (radians) applied to a stuck agent's desired
  * direction, scaled by the same impatience fraction as the speed boost.
  * A pure speed increase can't break a geometric arch at a bottleneck - the

@@ -27,6 +27,8 @@ import {
   CANVAS_WIDTH,
   CORRIDOR_WIDTH_OPTIONS,
   DEFAULT_AGENT_COUNT,
+  PRESSURE_DEATH_SECONDS,
+  PRESSURE_DEATH_THRESHOLD,
 } from "./simulation/presets";
 import { getHealth, solveOrientation } from "./api/client";
 import type { OrientationScore, OrientedEdge, SolverType } from "./api/types";
@@ -205,8 +207,14 @@ function App() {
               <p>
                 Agents: {agentCount}
                 {simulationStats &&
-                  ` · Moving: ${simulationStats.moving} · Stuck: ${simulationStats.stuck.length}`}
+                  ` · Moving: ${simulationStats.moving} · Dead: ${simulationStats.dead} · Stuck: ${simulationStats.stuck.length}`}
               </p>
+              {simulationStats && (
+                <p>
+                  Peak pressure: {simulationStats.peakPressure.toFixed(1)} · Fatal at{" "}
+                  {PRESSURE_DEATH_THRESHOLD.toFixed(1)} for {PRESSURE_DEATH_SECONDS.toFixed(1)}s
+                </p>
+              )}
               {simulationStats && simulationStats.stuck.length > 0 && (
                 <details open>
                   <summary>Stuck agent diagnostics</summary>
