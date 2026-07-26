@@ -10,10 +10,11 @@ import type {
   WeightedRequestDto,
 } from "./types";
 
-// Dev default "/mr2s-api" goes through the Vite proxy (vite.config.ts) because
-// the external backend's CORS allowlist has no localhost origin. Production
-// builds set VITE_API_BASE_URL to the deployed backend (must be hosted on an
-// allowlisted origin).
+// The default "/mr2s-api" prefix is a same-origin proxy path: the Vite dev
+// server proxies it (vite.config.ts) and Vercel rewrites it (vercel.json),
+// so no origin ever needs to be in the backend's CORS allowlist. Set
+// VITE_API_BASE_URL only to call the backend directly from an allowlisted
+// origin.
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/mr2s-api";
 
 export class ApiError extends Error {

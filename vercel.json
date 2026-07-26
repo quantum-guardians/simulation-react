@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/mr2s-api", "destination": "https://quantum.yunseong.dev/" },
+    { "source": "/mr2s-api/:path*", "destination": "https://quantum.yunseong.dev/:path*" }
+  ]
+}

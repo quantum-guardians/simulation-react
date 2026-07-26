@@ -32,11 +32,15 @@ API 명세는 [docs/BACKEND_REFERENCE.md](docs/BACKEND_REFERENCE.md)를 참고�
   proxy(`/mr2s-api` → `https://quantum.yunseong.dev`)를 경유합니다
   (`vite.config.ts`). 로컬에서 mr2s-backend를 직접 띄웠다면
   `VITE_PROXY_TARGET=http://localhost:8000`으로 대상을 바꿀 수 있습니다.
-- **prod**: 빌드 시 `VITE_API_BASE_URL=https://quantum.yunseong.dev`를 설정해
-  직접 호출합니다. 단, 빌드 결과물을 호스팅하는 오리진이 백엔드의 CORS
-  허용 목록(`quantum-guardians.github.io`, `mr2s.vercel.app`,
-  `qi4uinpnu.vercel.app`)에 있어야 하며, 새 도메인은 백엔드 `main.py`의
-  `allow_origins`에 추가가 필요합니다.
+- **prod (Vercel)**: `vercel.json`의 rewrite가 `/mr2s-api/*`를
+  `https://quantum.yunseong.dev/*`로 서버 측에서 전달합니다. 브라우저 입장에서는
+  같은 오리진 요청이라 CORS 허용 목록과 무관합니다. dev proxy는 빌드 결과물에
+  포함되지 않으므로 이 rewrite가 없으면 `/mr2s-api/...`가 404가 납니다.
+- **prod (그 외 호스팅)**: rewrite를 걸 수 없다면 빌드 시
+  `VITE_API_BASE_URL=https://quantum.yunseong.dev`로 직접 호출합니다. 이 경우
+  호스팅 오리진이 백엔드의 CORS 허용 목록(`quantum-guardians.github.io`,
+  `mr2s.vercel.app`, `qi4uinpnu.vercel.app`)에 있어야 하며, 새 도메인은 백엔드
+  `main.py`의 `allow_origins`에 추가가 필요합니다.
 - 설정 예시는 `.env.example` 참고.
 
 ## 실행 방법
