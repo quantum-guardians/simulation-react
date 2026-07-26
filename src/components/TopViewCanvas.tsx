@@ -29,6 +29,7 @@ import {
   ADD_AGENTS_BATCH_SIZE,
   AGENT_MAX_SPEED,
   AGENT_RADIUS,
+  PRESSURE_CHECK_EVERY_TICKS,
   PRESSURE_DEATH_THRESHOLD,
   STUCK_PATIENCE_TICKS,
   STUCK_RAMP_TICKS,
@@ -264,23 +265,31 @@ export function TopViewCanvas({
     }
     const world = physicsWorldRef.current;
     if (world && world.agents.size > 0) {
-      const stateById = new Map(agentsRef.current.map((agent) => [agent.id, agent]));
-      const agentVisuals = Array.from(world.agents.values()).map((agent) => ({
-        ...agent.position,
-        id: agent.id,
-        vx: agent.velocity.x,
-        vy: agent.velocity.y,
-        targetLabel: stateById.get(agent.id)?.targetLeaf ?? "?",
-        isDead: stateById.get(agent.id)?.state === "dead",
-        pressureRatio: Math.min(
-          1,
-          (stateById.get(agent.id)?.pressure ?? 0) / PRESSURE_DEATH_THRESHOLD
-        ),
-        isStuck:
-          stateById.get(agent.id)?.state === "moving" &&
-          (stateById.get(agent.id)?.stuckTicks ?? 0) >=
-          STUCK_PATIENCE_TICKS + STUCK_RAMP_TICKS,
-      }));
+      // Iterate runtime states and look bodies up in the world's Map
+      // directly - building an id→state Map here every frame (60 Hz ×
+      // agent count) was measurable GC churn.
+      const severeStuckTicks = STUCK_PATIENCE_TICKS + STUCK_RAMP_TICKS;
+      const agentVisuals = [];
+      for (const state of agentsRef.current) {
+        const body = world.agents.get(state.id);
+        if (!body) continue;
+        agentVisuals.push({
+          x: body.position.x,
+          y: body.position.y,
+          id: body.id,
+          vx: body.velocity.x,
+          vy: body.velocity.y,
+          targetLabel: state.targetLeaf,
+          isDead: state.state === "dead",
+          pressureRatio: Math.min(
+            1,
+            (state.pressure ?? 0) / PRESSURE_DEATH_THRESHOLD
+          ),
+          isStuck:
+            state.state === "moving" &&
+            (state.stuckTicks ?? 0) >= severeStuckTicks,
+        });
+      }
       drawAgents(ctx, agentVisuals, AGENT_RADIUS);
     }
   }
@@ -295,6 +304,7 @@ export function TopViewCanvas({
     let last = performance.now();
     let lastDensityCheck = 0;
     let lastAddBatchCheck = 0;
+    let ticksSincePressureCheck = 0;
 
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
@@ -353,7 +363,14 @@ export function TopViewCanvas({
           const desired = computeDesiredDirections(agentsRef.current, world, propsRef.current.agentSpeed);
           stepSocialForce(world, desired, FIXED_DT_MS, propsRef.current.agentSpeed);
           constrainAgentsToRoutes(agentsRef.current, world);
-          updatePressureDeaths(agentsRef.current, world);
+          // Pressure death needs seconds of sustained exposure; sample it
+          // on a coarser cadence with the elapsed tick count instead of
+          // paying the contact scan every physics tick.
+          ticksSincePressureCheck++;
+          if (ticksSincePressureCheck >= PRESSURE_CHECK_EVERY_TICKS) {
+            updatePressureDeaths(agentsRef.current, world, ticksSincePressureCheck);
+            ticksSincePressureCheck = 0;
+          }
           acc -= FIXED_DT_MS;
           stepsThisFrame++;
         }

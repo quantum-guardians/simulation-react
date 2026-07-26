@@ -144,6 +144,11 @@ export const PRESSURE_DEATH_SECONDS = 3;
 /** Exposure recovers this many times faster than it accumulates. */
 export const PRESSURE_RECOVERY_RATE = 3;
 
+/** Pressure is sampled every this many physics ticks (with exposure scaled
+ * by the same factor) instead of at 60 Hz - death needs seconds of
+ * sustained exposure, so per-tick sampling only costs an extra O(n) pass. */
+export const PRESSURE_CHECK_EVERY_TICKS = 4;
+
 /** Maximum random deviation (radians) applied to a stuck agent's desired
  * direction, scaled by the same impatience fraction as the speed boost.
  * A pure speed increase can't break a geometric arch at a bottleneck - the

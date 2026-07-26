@@ -314,7 +314,7 @@ export function computeDesiredDirections(
     let laneTarget = rightLaneTarget(previousWaypoint, waypoint);
     let dx = laneTarget.x - sfmAgent.position.x;
     let dy = laneTarget.y - sfmAgent.position.y;
-    let dist = Math.hypot(dx, dy);
+    let dist = Math.sqrt(dx * dx + dy * dy);
 
     // A crowded junction can shove an agent just beyond a waypoint without
     // ever putting its center inside the arrival circle. Treat crossing the
@@ -341,7 +341,7 @@ export function computeDesiredDirections(
       laneTarget = rightLaneTarget(previousWaypoint, next);
       dx = laneTarget.x - sfmAgent.position.x;
       dy = laneTarget.y - sfmAgent.position.y;
-      dist = Math.hypot(dx, dy);
+      dist = Math.sqrt(dx * dx + dy * dy);
       if (dist <= 1e-9) continue;
     }
 
@@ -469,7 +469,7 @@ export function constrainAgentsToRoutes(
     };
     const dx = body.position.x - nearest.x;
     const dy = body.position.y - nearest.y;
-    const lateralDistance = Math.hypot(dx, dy);
+    const lateralDistance = Math.sqrt(dx * dx + dy * dy);
     if (lateralDistance <= maxLateralDistance) continue;
     const scale = maxLateralDistance / lateralDistance;
     body.position.x = nearest.x + dx * scale;
@@ -523,6 +523,10 @@ export function continueArrivedAgents(
   deps: SpawnAgentDeps,
   maxAssignments: number = RESPAWN_BATCH_SIZE
 ): AgentRuntimeState[] {
+  // Runs every physics tick; skip the map() allocation on the common
+  // nobody-arrived tick.
+  if (!agents.some((agent) => agent.state === "arrived")) return agents;
+
   const rng = deps.rng ?? Math.random;
   let assigned = 0;
 
