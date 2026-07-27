@@ -18,8 +18,8 @@ export function GraphCsvInput({ onParsed }: GraphCsvInputProps) {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("force");
   const [errors, setErrors] = useState<string[]>([]);
 
-  function parseAndLayout(value: string) {
-    const result = onParsed(value, layoutMode);
+  function parseAndLayout(value: string, mode: LayoutMode = layoutMode) {
+    const result = onParsed(value, mode);
     setErrors(result?.errors ?? []);
   }
 
@@ -27,6 +27,16 @@ export function GraphCsvInput({ onParsed }: GraphCsvInputProps) {
     const generated = generateRandomConnectedGraphCsv(randomNodeCount);
     setRaw(generated);
     parseAndLayout(generated);
+  }
+
+  /**
+   * Re-lay out immediately instead of waiting for another "Parse & Layout"
+   * click: a mode picker that leaves the drawing unchanged reads as if the
+   * mode itself did nothing.
+   */
+  function handleLayoutModeChange(mode: LayoutMode) {
+    setLayoutMode(mode);
+    if (raw.trim().length > 0) parseAndLayout(raw, mode);
   }
 
   return (
@@ -44,7 +54,7 @@ export function GraphCsvInput({ onParsed }: GraphCsvInputProps) {
         <select
           id="layout-mode"
           value={layoutMode}
-          onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
+          onChange={(event) => handleLayoutModeChange(event.target.value as LayoutMode)}
         >
           <option value="force">Force-directed</option>
           <option value="planar">Planar (no crossings)</option>
