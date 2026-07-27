@@ -6,6 +6,11 @@ import {
   type WallSegment,
 } from "./corridors";
 import {
+  buildSpatialGrid,
+  createSpatialGrid,
+  forEachNeighborPair,
+} from "./spatialGrid";
+import {
   AGENT_MAX_SPEED,
   AGENT_RADIUS,
   SFM_A_AGENT,
@@ -143,6 +148,70 @@ function separationDirection(i: number, j: number): { x: number; y: number } {
 const MAX_OVERLAP_CORRECTION_PX = 2.5;
 
 /**
+ * Scratch buffers reused across stepSocialForce calls. The step runs at
+ * 60 Hz × substeps, so per-call Float64Array/closure allocation shows up
+ * directly as GC pauses; everything sized by agent/wall count lives here
+ * and only grows. Safe as module state because steps never run
+ * concurrently or reentrantly.
+ */
+const scratch = {
+  capacity: 0,
+  ax: new Float64Array(0),
+  ay: new Float64Array(0),
+  previousX: new Float64Array(0),
+  previousY: new Float64Array(0),
+  posX: new Float64Array(0),
+  posY: new Float64Array(0),
+  pushX: new Float64Array(0),
+  pushY: new Float64Array(0),
+  /** Per-agent interaction radius (radius × socialScale, see below). */
+  effRadius: new Float64Array(0),
+  socialScale: new Float64Array(0),
+  desiredEx: new Float64Array(0),
+  desiredEy: new Float64Array(0),
+  hasDesired: new Uint8Array(0),
+  agents: [] as SfmAgent[],
+  grid: createSpatialGrid(),
+  wallCapacity: 0,
+  wallMinX: new Float64Array(0),
+  wallMinY: new Float64Array(0),
+  wallMaxX: new Float64Array(0),
+  wallMaxY: new Float64Array(0),
+  /** Extra AABB slack per wall covering the ±5% span tolerance used by
+   * resolveWallCollisions' crossing check. */
+  wallSpanSlack: new Float64Array(0),
+};
+
+function ensureAgentCapacity(n: number): void {
+  if (scratch.capacity >= n) return;
+  const capacity = Math.max(n, scratch.capacity * 2, 64);
+  scratch.capacity = capacity;
+  scratch.ax = new Float64Array(capacity);
+  scratch.ay = new Float64Array(capacity);
+  scratch.previousX = new Float64Array(capacity);
+  scratch.previousY = new Float64Array(capacity);
+  scratch.posX = new Float64Array(capacity);
+  scratch.posY = new Float64Array(capacity);
+  scratch.pushX = new Float64Array(capacity);
+  scratch.pushY = new Float64Array(capacity);
+  scratch.effRadius = new Float64Array(capacity);
+  scratch.socialScale = new Float64Array(capacity);
+  scratch.desiredEx = new Float64Array(capacity);
+  scratch.desiredEy = new Float64Array(capacity);
+  scratch.hasDesired = new Uint8Array(capacity);
+}
+
+function ensureWallCapacity(count: number): void {
+  if (scratch.wallCapacity >= count) return;
+  scratch.wallCapacity = count;
+  scratch.wallMinX = new Float64Array(count);
+  scratch.wallMinY = new Float64Array(count);
+  scratch.wallMaxX = new Float64Array(count);
+  scratch.wallMaxY = new Float64Array(count);
+  scratch.wallSpanSlack = new Float64Array(count);
+}
+
+/**
  * Positional overlap resolution, run after force integration each substep.
  * The contact spring alone cannot stop a fast head-on approach within one
  * substep (a stiff-enough spring would need a far smaller dt), so any
@@ -150,62 +219,59 @@ const MAX_OVERLAP_CORRECTION_PX = 2.5;
  * overlapping pair is pushed out by half the overlap. Corrections are
  * accumulated per agent and applied once, clamped to
  * MAX_OVERLAP_CORRECTION_PX. Symmetric per pair, so it preserves the
- * model's momentum symmetry.
+ * model's momentum symmetry. Candidate pairs come from the spatial grid
+ * (rebuilt here because integration just moved everyone).
  */
-function effectiveInteractionRadius(
-  agent: SfmAgent,
-  desired: Map<string, DesiredMotion>
-): number {
-  const socialScale = desired.get(agent.id)?.socialScale ?? 1;
-  // A fully jammed pedestrian temporarily becomes a "ghost" only to other
-  // pedestrians. Its full radius is still used for every wall collision,
-  // so deadlock recovery cannot tunnel through the corridor boundary. As
-  // soon as forward progress resumes, socialScale rises and the normal
-  // collision radius returns.
-  return agent.radius * socialScale;
-}
-
 function resolveAgentOverlaps(
   agents: SfmAgent[],
-  desired: Map<string, DesiredMotion>
+  n: number,
+  maxEffRadius: number
 ): void {
-  const n = agents.length;
-  const pushX = new Float64Array(n);
-  const pushY = new Float64Array(n);
-
+  const { posX, posY, pushX, pushY, effRadius, grid } = scratch;
+  pushX.fill(0, 0, n);
+  pushY.fill(0, 0, n);
   for (let i = 0; i < n; i++) {
-    const ai = agents[i];
-    for (let j = i + 1; j < n; j++) {
-      const aj = agents[j];
-      const rij =
-        effectiveInteractionRadius(ai, desired) +
-        effectiveInteractionRadius(aj, desired);
-      let dx = ai.position.x - aj.position.x;
-      let dy = ai.position.y - aj.position.y;
-      if (dx > rij || dx < -rij || dy > rij || dy < -rij) continue;
-      let dist = Math.hypot(dx, dy);
-      if (dist >= rij) continue;
-      if (dist < 1e-6) {
-        const dir = separationDirection(i, j);
-        dx = dir.x;
-        dy = dir.y;
-        dist = 1;
-      }
-      const push = (rij - dist) / 2;
-      const nx = dx / dist;
-      const ny = dy / dist;
-      pushX[i] += nx * push;
-      pushY[i] += ny * push;
-      pushX[j] -= nx * push;
-      pushY[j] -= ny * push;
-    }
+    posX[i] = agents[i].position.x;
+    posY[i] = agents[i].position.y;
   }
+  buildSpatialGrid(grid, posX, posY, n, Math.max(2 * maxEffRadius, 1));
+
+  forEachNeighborPair(grid, (i, j) => {
+    // Canonical order so separationDirection stays deterministic
+    // regardless of grid visit order.
+    if (i > j) {
+      const swap = i;
+      i = j;
+      j = swap;
+    }
+    const ai = agents[i];
+    const aj = agents[j];
+    const rij = effRadius[i] + effRadius[j];
+    let dx = ai.position.x - aj.position.x;
+    let dy = ai.position.y - aj.position.y;
+    if (dx > rij || dx < -rij || dy > rij || dy < -rij) return;
+    let dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist >= rij) return;
+    if (dist < 1e-6) {
+      const dir = separationDirection(i, j);
+      dx = dir.x;
+      dy = dir.y;
+      dist = 1;
+    }
+    const push = (rij - dist) / 2;
+    const nx = dx / dist;
+    const ny = dy / dist;
+    pushX[i] += nx * push;
+    pushY[i] += ny * push;
+    pushX[j] -= nx * push;
+    pushY[j] -= ny * push;
+  });
 
   for (let i = 0; i < n; i++) {
     let cx = pushX[i];
     let cy = pushY[i];
     if (cx === 0 && cy === 0) continue;
-    const magnitude = Math.hypot(cx, cy);
+    const magnitude = Math.sqrt(cx * cx + cy * cy);
     if (magnitude > MAX_OVERLAP_CORRECTION_PX) {
       const scale = MAX_OVERLAP_CORRECTION_PX / magnitude;
       cx *= scale;
@@ -233,7 +299,24 @@ function resolveWallCollisions(
   previousX: number,
   previousY: number
 ): void {
-  for (const wall of walls) {
+  const { wallMinX, wallMinY, wallMaxX, wallMaxY, wallSpanSlack } = scratch;
+  for (let w = 0; w < walls.length; w++) {
+    // Cheap AABB reject (position re-read per wall - an earlier wall in
+    // this loop may have just snapped the agent). Slack covers the agent
+    // radius, one substep of travel plus overlap correction, and the ±5%
+    // span tolerance of the crossing check below.
+    const x = agent.position.x;
+    const y = agent.position.y;
+    const reject = agent.radius + 8 + wallSpanSlack[w];
+    if (
+      x < wallMinX[w] - reject ||
+      x > wallMaxX[w] + reject ||
+      y < wallMinY[w] - reject ||
+      y > wallMaxY[w] + reject
+    ) {
+      continue;
+    }
+    const wall = walls[w];
     const wx = wall.b.x - wall.a.x;
     const wy = wall.b.y - wall.a.y;
     const lengthSq = wx * wx + wy * wy;
@@ -301,9 +384,12 @@ export function stepSocialForce(
   dtMs: number = FIXED_DT_MS,
   maxSpeed: number = AGENT_MAX_SPEED
 ): void {
-  const agents = Array.from(world.agents.values());
+  const agents = scratch.agents;
+  agents.length = 0;
+  for (const agent of world.agents.values()) agents.push(agent);
   const n = agents.length;
   if (n === 0) return;
+  ensureAgentCapacity(n);
 
   const displacementPerStep = (maxSpeed * dtMs) / 1000;
   const substeps = Math.max(
@@ -321,101 +407,172 @@ export function stepSocialForce(
 
   // Repulsive (social + contact) acceleration accumulators, plus each
   // agent's pre-integration position for wall-crossing detection.
-  const ax = new Float64Array(n);
-  const ay = new Float64Array(n);
-  const previousX = new Float64Array(n);
-  const previousY = new Float64Array(n);
+  const {
+    ax,
+    ay,
+    previousX,
+    previousY,
+    posX,
+    posY,
+    effRadius,
+    socialScale,
+    desiredEx,
+    desiredEy,
+    hasDesired,
+    grid,
+  } = scratch;
+
+  // Hoist the per-agent Map lookups out of the O(pairs) loop: desired
+  // motion (and thus socialScale / interaction radius) is fixed for the
+  // whole tick. A fully jammed pedestrian's socialScale can reach 0 -
+  // a "ghost" to other pedestrians - but its full radius is still used
+  // for every wall interaction, so deadlock recovery cannot tunnel
+  // through the corridor boundary.
+  let maxEffRadius = 0;
+  for (let i = 0; i < n; i++) {
+    const motion = desired.get(agents[i].id);
+    const scale = motion?.socialScale ?? 1;
+    socialScale[i] = scale;
+    effRadius[i] = agents[i].radius * scale;
+    if (effRadius[i] > maxEffRadius) maxEffRadius = effRadius[i];
+    if (motion) {
+      hasDesired[i] = 1;
+      desiredEx[i] = motion.ex;
+      desiredEy[i] = motion.ey;
+    } else {
+      hasDesired[i] = 0;
+      desiredEx[i] = 0;
+      desiredEy[i] = 0;
+    }
+  }
+  // Grid cells must cover the largest possible pair cutoff.
+  const pairCellSize = 2 * maxEffRadius + agentCutoff;
+
+  // Wall AABBs for the force loop and resolveWallCollisions rejects.
+  const walls = world.walls;
+  ensureWallCapacity(walls.length);
+  const { wallMinX, wallMinY, wallMaxX, wallMaxY, wallSpanSlack } = scratch;
+  for (let w = 0; w < walls.length; w++) {
+    const wall = walls[w];
+    wallMinX[w] = Math.min(wall.a.x, wall.b.x);
+    wallMaxX[w] = Math.max(wall.a.x, wall.b.x);
+    wallMinY[w] = Math.min(wall.a.y, wall.b.y);
+    wallMaxY[w] = Math.max(wall.a.y, wall.b.y);
+    wallSpanSlack[w] =
+      0.05 * Math.hypot(wall.b.x - wall.a.x, wall.b.y - wall.a.y);
+  }
+
+  // Symmetric pair force kernel; candidate pairs come from the grid.
+  const pairKernel = (i: number, j: number) => {
+    // Canonical order so separationDirection stays deterministic
+    // regardless of grid visit order.
+    if (i > j) {
+      const swap = i;
+      i = j;
+      j = swap;
+    }
+    const ai = agents[i];
+    const aj = agents[j];
+    const rij = effRadius[i] + effRadius[j];
+    const cutoff = rij + agentCutoff;
+    let dx = ai.position.x - aj.position.x;
+    let dy = ai.position.y - aj.position.y;
+    if (dx > cutoff || dx < -cutoff || dy > cutoff || dy < -cutoff) return;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > cutoff * cutoff) return;
+
+    let dist = Math.sqrt(distSq);
+    if (dist < 1e-6) {
+      const dir = separationDirection(i, j);
+      dx = dir.x;
+      dy = dir.y;
+      dist = 1;
+    }
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // Anisotropic weighting of the long-range social term only: each
+    // agent perceives the other relative to its own facing (nx, ny
+    // points from j to i). Full strength ahead, SFM_ANISOTROPY_LAMBDA
+    // behind. Agents with no desired motion (e.g. arrived) stay
+    // isotropic. The hard body-contact spring/friction below is
+    // deliberately left unweighted - actual touch is felt regardless of
+    // facing, and asymmetric weighting there would let a "blind side"
+    // approach interpenetrate.
+    const social = SFM_A_AGENT * Math.exp((rij - dist) / SFM_B_AGENT);
+    const wi = hasDesired[i]
+      ? SFM_ANISOTROPY_LAMBDA +
+        (1 - SFM_ANISOTROPY_LAMBDA) * (1 - (desiredEx[i] * nx + desiredEy[i] * ny)) / 2
+      : 1;
+    const wj = hasDesired[j]
+      ? SFM_ANISOTROPY_LAMBDA +
+        (1 - SFM_ANISOTROPY_LAMBDA) * (1 + (desiredEx[j] * nx + desiredEy[j] * ny)) / 2
+      : 1;
+
+    let fxi = social * wi * socialScale[i] * nx;
+    let fyi = social * wi * socialScale[i] * ny;
+    let fxj = -social * wj * socialScale[j] * nx;
+    let fyj = -social * wj * socialScale[j] * ny;
+
+    const overlap = rij - dist;
+    if (overlap > 0) {
+      const contactX = SFM_K_BODY * overlap * nx;
+      const contactY = SFM_K_BODY * overlap * ny;
+      fxi += contactX;
+      fyi += contactY;
+      fxj -= contactX;
+      fyj -= contactY;
+      // Sliding friction along the tangent t = (-ny, nx).
+      const tx = -ny;
+      const ty = nx;
+      const relTangentialSpeed =
+        (aj.velocity.x - ai.velocity.x) * tx + (aj.velocity.y - ai.velocity.y) * ty;
+      const coefficient = Math.min(SFM_KAPPA * overlap, maxFrictionCoefficient);
+      const frictionX = coefficient * relTangentialSpeed * tx;
+      const frictionY = coefficient * relTangentialSpeed * ty;
+      fxi += frictionX;
+      fyi += frictionY;
+      fxj -= frictionX;
+      fyj -= frictionY;
+    }
+
+    ax[i] += fxi;
+    ay[i] += fyi;
+    ax[j] += fxj;
+    ay[j] += fyj;
+  };
 
   for (let s = 0; s < substeps; s++) {
-    ax.fill(0);
-    ay.fill(0);
+    ax.fill(0, 0, n);
+    ay.fill(0, 0, n);
 
     // Agent-agent forces, applied symmetrically per pair.
     for (let i = 0; i < n; i++) {
+      posX[i] = agents[i].position.x;
+      posY[i] = agents[i].position.y;
+    }
+    buildSpatialGrid(grid, posX, posY, n, pairCellSize);
+    forEachNeighborPair(grid, pairKernel);
+
+    // Wall forces.
+    for (let i = 0; i < n; i++) {
       const ai = agents[i];
-      for (let j = i + 1; j < n; j++) {
-        const aj = agents[j];
-        const rij =
-          effectiveInteractionRadius(ai, desired) +
-          effectiveInteractionRadius(aj, desired);
-        const cutoff = rij + agentCutoff;
-        let dx = ai.position.x - aj.position.x;
-        let dy = ai.position.y - aj.position.y;
-        if (dx > cutoff || dx < -cutoff || dy > cutoff || dy < -cutoff) continue;
-        const distSq = dx * dx + dy * dy;
-        if (distSq > cutoff * cutoff) continue;
-
-        let dist = Math.sqrt(distSq);
-        if (dist < 1e-6) {
-          const dir = separationDirection(i, j);
-          dx = dir.x;
-          dy = dir.y;
-          dist = 1;
+      const cutoff = ai.radius + wallCutoff;
+      const x = ai.position.x;
+      const y = ai.position.y;
+      for (let w = 0; w < walls.length; w++) {
+        if (
+          x < wallMinX[w] - cutoff ||
+          x > wallMaxX[w] + cutoff ||
+          y < wallMinY[w] - cutoff ||
+          y > wallMaxY[w] + cutoff
+        ) {
+          continue;
         }
-        const nx = dx / dist;
-        const ny = dy / dist;
-
-        // Anisotropic weighting of the long-range social term only: each
-        // agent perceives the other relative to its own facing (nx, ny
-        // points from j to i). Full strength ahead, SFM_ANISOTROPY_LAMBDA
-        // behind. Agents with no desired motion (e.g. arrived) stay
-        // isotropic. The hard body-contact spring/friction below is
-        // deliberately left unweighted - actual touch is felt regardless of
-        // facing, and asymmetric weighting there would let a "blind side"
-        // approach interpenetrate.
-        const social = SFM_A_AGENT * Math.exp((rij - dist) / SFM_B_AGENT);
-        const di = desired.get(ai.id);
-        const dj = desired.get(aj.id);
-        const wi = di
-          ? SFM_ANISOTROPY_LAMBDA +
-            (1 - SFM_ANISOTROPY_LAMBDA) * (1 - (di.ex * nx + di.ey * ny)) / 2
-          : 1;
-        const wj = dj
-          ? SFM_ANISOTROPY_LAMBDA +
-            (1 - SFM_ANISOTROPY_LAMBDA) * (1 + (dj.ex * nx + dj.ey * ny)) / 2
-          : 1;
-
-        const socialScaleI = di?.socialScale ?? 1;
-        const socialScaleJ = dj?.socialScale ?? 1;
-        let fxi = social * wi * socialScaleI * nx;
-        let fyi = social * wi * socialScaleI * ny;
-        let fxj = -social * wj * socialScaleJ * nx;
-        let fyj = -social * wj * socialScaleJ * ny;
-
-        const overlap = rij - dist;
-        if (overlap > 0) {
-          const contactX = SFM_K_BODY * overlap * nx;
-          const contactY = SFM_K_BODY * overlap * ny;
-          fxi += contactX;
-          fyi += contactY;
-          fxj -= contactX;
-          fyj -= contactY;
-          // Sliding friction along the tangent t = (-ny, nx).
-          const tx = -ny;
-          const ty = nx;
-          const relTangentialSpeed =
-            (aj.velocity.x - ai.velocity.x) * tx + (aj.velocity.y - ai.velocity.y) * ty;
-          const coefficient = Math.min(SFM_KAPPA * overlap, maxFrictionCoefficient);
-          const frictionX = coefficient * relTangentialSpeed * tx;
-          const frictionY = coefficient * relTangentialSpeed * ty;
-          fxi += frictionX;
-          fyi += frictionY;
-          fxj -= frictionX;
-          fyj -= frictionY;
-        }
-
-        ax[i] += fxi;
-        ay[i] += fyi;
-        ax[j] += fxj;
-        ay[j] += fyj;
-      }
-
-      // Wall forces.
-      for (const wall of world.walls) {
+        const wall = walls[w];
         const closest = closestPointOnSegment(ai.position, wall.a, wall.b);
-        const dx = ai.position.x - closest.x;
-        const dy = ai.position.y - closest.y;
-        const cutoff = ai.radius + wallCutoff;
+        const dx = x - closest.x;
+        const dy = y - closest.y;
         const distSq = dx * dx + dy * dy;
         if (distSq > cutoff * cutoff || distSq < 1e-12) continue;
         const dist = Math.sqrt(distSq);
@@ -446,7 +603,7 @@ export function stepSocialForce(
       previousY[i] = agent.position.y;
       let rx = ax[i];
       let ry = ay[i];
-      const repulsionMagnitude = Math.hypot(rx, ry);
+      const repulsionMagnitude = Math.sqrt(rx * rx + ry * ry);
       if (repulsionMagnitude > SFM_MAX_ACCEL) {
         const scale = SFM_MAX_ACCEL / repulsionMagnitude;
         rx *= scale;
@@ -463,7 +620,9 @@ export function stepSocialForce(
       agent.velocity.y += (driveY + ry) * dt;
 
       const speedCap = SFM_SPEED_FACTOR * (motion ? motion.speed : maxSpeed);
-      const speed = Math.hypot(agent.velocity.x, agent.velocity.y);
+      const speed = Math.sqrt(
+        agent.velocity.x * agent.velocity.x + agent.velocity.y * agent.velocity.y
+      );
       if (speed > speedCap && speed > 0) {
         const scale = speedCap / speed;
         agent.velocity.x *= scale;
@@ -490,9 +649,9 @@ export function stepSocialForce(
     }
 
     // Geometric cleanup: pairs first, walls last so walls always win.
-    resolveAgentOverlaps(agents, desired);
+    resolveAgentOverlaps(agents, n, maxEffRadius);
     for (let i = 0; i < n; i++) {
-      resolveWallCollisions(agents[i], world.walls, previousX[i], previousY[i]);
+      resolveWallCollisions(agents[i], walls, previousX[i], previousY[i]);
     }
 
     // Overlap correction is positional and can undo the forward velocity
@@ -513,4 +672,7 @@ export function stepSocialForce(
       }
     }
   }
+
+  // Don't retain references to removed agents between ticks.
+  agents.length = 0;
 }

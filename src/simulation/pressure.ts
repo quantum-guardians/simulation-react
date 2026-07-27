@@ -7,6 +7,11 @@ import {
   PRESSURE_RECOVERY_RATE,
 } from "./presets";
 import type { SfmWorld } from "./socialForce";
+import {
+  buildSpatialGrid,
+  createSpatialGrid,
+  forEachNeighborPair,
+} from "./spatialGrid";
 
 const PHYSICS_TICKS_PER_SECOND = 60;
 export const PRESSURE_DEATH_TICKS = PRESSURE_DEATH_SECONDS * PHYSICS_TICKS_PER_SECOND;
@@ -30,38 +35,75 @@ function compressionFromGap(gap: number): number {
   );
 }
 
+/** Reused across calls - pressure runs on the hot tick path. */
+const scratch = {
+  posX: new Float64Array(0),
+  posY: new Float64Array(0),
+  grid: createSpatialGrid(),
+};
+
 /**
  * Estimates local compressive pressure from simultaneous close contacts
  * with pedestrians and walls. A normal queue stays below the fatal
  * threshold, while a tightly packed body with several contacts does not.
+ * Candidate pairs come from a spatial grid - compression only exists
+ * within PRESSURE_CONTACT_RANGE_PX of body contact, so almost all of the
+ * O(n²) pairs are irrelevant.
  */
 export function computeAgentPressures(world: SfmWorld): Map<string, number> {
   const bodies = Array.from(world.agents.values());
+  const n = bodies.length;
   const pressures = new Map(bodies.map((body) => [body.id, 0]));
+  if (n === 0) return pressures;
 
-  for (let i = 0; i < bodies.length; i++) {
-    const first = bodies[i];
-    for (let j = i + 1; j < bodies.length; j++) {
-      const second = bodies[j];
-      const distance = Math.hypot(
-        first.position.x - second.position.x,
-        first.position.y - second.position.y
-      );
-      const compression = compressionFromGap(distance - first.radius - second.radius);
-      if (compression === 0) continue;
-      pressures.set(first.id, (pressures.get(first.id) ?? 0) + compression);
-      pressures.set(second.id, (pressures.get(second.id) ?? 0) + compression);
-    }
+  if (scratch.posX.length < n) {
+    scratch.posX = new Float64Array(Math.max(n, 64));
+    scratch.posY = new Float64Array(Math.max(n, 64));
   }
+  const { posX, posY, grid } = scratch;
+  let maxRadius = 0;
+  for (let i = 0; i < n; i++) {
+    posX[i] = bodies[i].position.x;
+    posY[i] = bodies[i].position.y;
+    if (bodies[i].radius > maxRadius) maxRadius = bodies[i].radius;
+  }
+  buildSpatialGrid(grid, posX, posY, n, 2 * maxRadius + PRESSURE_CONTACT_RANGE_PX);
+
+  forEachNeighborPair(grid, (i, j) => {
+    const first = bodies[i];
+    const second = bodies[j];
+    const contact = first.radius + second.radius + PRESSURE_CONTACT_RANGE_PX;
+    const dx = first.position.x - second.position.x;
+    const dy = first.position.y - second.position.y;
+    if (dx > contact || dx < -contact || dy > contact || dy < -contact) return;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > contact * contact) return;
+    const distance = Math.sqrt(distSq);
+    const compression = compressionFromGap(distance - first.radius - second.radius);
+    if (compression === 0) return;
+    pressures.set(first.id, (pressures.get(first.id) ?? 0) + compression);
+    pressures.set(second.id, (pressures.get(second.id) ?? 0) + compression);
+  });
 
   for (const body of bodies) {
     let maximumWallCompression = 0;
+    const reach = body.radius + PRESSURE_CONTACT_RANGE_PX;
+    const x = body.position.x;
+    const y = body.position.y;
     for (const wall of world.walls) {
+      // Cheap AABB reject before the segment projection.
+      if (
+        x < Math.min(wall.a.x, wall.b.x) - reach ||
+        x > Math.max(wall.a.x, wall.b.x) + reach ||
+        y < Math.min(wall.a.y, wall.b.y) - reach ||
+        y > Math.max(wall.a.y, wall.b.y) + reach
+      ) {
+        continue;
+      }
       const closest = closestPointOnSegment(body.position, wall.a, wall.b);
-      const distance = Math.hypot(
-        body.position.x - closest.x,
-        body.position.y - closest.y
-      );
+      const dx = x - closest.x;
+      const dy = y - closest.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
       maximumWallCompression = Math.max(
         maximumWallCompression,
         compressionFromGap(distance - body.radius)
@@ -89,10 +131,16 @@ export interface PressureUpdateResult {
  * Accumulates sustained high-pressure exposure and marks deaths. Exposure
  * decays quickly below the threshold, so separate brief bumps do not add
  * up to a death much later.
+ *
+ * `elapsedTicks` lets callers sample pressure at a lower cadence than the
+ * physics tick (death needs seconds of sustained exposure, so 60 Hz
+ * sampling buys nothing): a call covering 4 ticks accumulates/decays 4
+ * ticks' worth of exposure.
  */
 export function updatePressureDeaths(
   agents: AgentRuntimeState[],
-  world: SfmWorld
+  world: SfmWorld,
+  elapsedTicks: number = 1
 ): PressureUpdateResult {
   const pressures = computeAgentPressures(world);
   const newlyDeadIds: string[] = [];
@@ -103,8 +151,11 @@ export function updatePressureDeaths(
 
     agent.highPressureTicks =
       agent.pressure >= PRESSURE_DEATH_THRESHOLD
-        ? (agent.highPressureTicks ?? 0) + 1
-        : Math.max(0, (agent.highPressureTicks ?? 0) - PRESSURE_RECOVERY_RATE);
+        ? (agent.highPressureTicks ?? 0) + elapsedTicks
+        : Math.max(
+            0,
+            (agent.highPressureTicks ?? 0) - PRESSURE_RECOVERY_RATE * elapsedTicks
+          );
 
     if (agent.highPressureTicks < PRESSURE_DEATH_TICKS) continue;
     agent.state = "dead";
