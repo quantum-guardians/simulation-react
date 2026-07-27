@@ -9,6 +9,7 @@ import {
   TopViewCanvas,
   SIMULATION_ENGINE_VERSION,
   type AddAgentsRequest,
+  type RemoveAgentsRequest,
   type SimulationConfig,
   type SimulationStats,
 } from "./components/TopViewCanvas";
@@ -47,6 +48,7 @@ function App() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [simulation, setSimulation] = useState<SimulationConfig | null>(null);
   const [addAgentsRequest, setAddAgentsRequest] = useState<AddAgentsRequest | null>(null);
+  const [removeAgentsRequest, setRemoveAgentsRequest] = useState<RemoveAgentsRequest | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showGraphOverlay, setShowGraphOverlay] = useState(true);
   const [agentCount, setAgentCount] = useState(0);
@@ -117,6 +119,24 @@ function App() {
     }));
   }
 
+  function handleRemoveAgents(mode: RemoveAgentsRequest["mode"]) {
+    setRemoveAgentsRequest((prev) => ({
+      requestId: (prev?.requestId ?? 0) + 1,
+      mode,
+    }));
+  }
+
+  function handleClearOrientation() {
+    setOrientedEdges([]);
+    setScore(null);
+    // Re-route future spawns/respawns as undirected (walkable both ways),
+    // without resetting the world or agents already mid-walk.
+    if (csvGraph) {
+      const nextAdjacency = buildAdjacency(csvGraph.nodeIds, csvGraph.edges, orientedEdgesToLookup([]));
+      setSimulation((prev) => (prev ? { ...prev, adjacency: nextAdjacency } : prev));
+    }
+  }
+
   function handleNodePositionsChange(next: Map<string, Point>) {
     setNodePositions(next);
     if (csvGraph && corridors.length > 0) {
@@ -181,6 +201,11 @@ function App() {
               canGeneratePaths
               onAddAgents={handleAddAgents}
               canAddAgents={stage === "simulating"}
+              onRemoveDeadAgents={() => handleRemoveAgents("dead")}
+              onRemoveAllAgents={() => handleRemoveAgents("all")}
+              canRemoveAgents={stage === "simulating"}
+              onClearOrientation={handleClearOrientation}
+              canClearOrientation={orientedEdges.length > 0}
               agentSpeed={agentSpeed}
               onAgentSpeedChange={setAgentSpeed}
               playbackRate={playbackRate}
@@ -249,6 +274,7 @@ function App() {
               hubs={hubs}
               simulation={simulation}
               addAgentsRequest={addAgentsRequest}
+              removeAgentsRequest={removeAgentsRequest}
               agentSpeed={agentSpeed}
               playbackRate={playbackRate}
               isPlaying={isPlaying}

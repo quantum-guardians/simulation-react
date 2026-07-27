@@ -5,6 +5,11 @@ export interface ControlPanelProps {
   canGeneratePaths: boolean;
   onAddAgents: () => void;
   canAddAgents: boolean;
+  onRemoveDeadAgents: () => void;
+  onRemoveAllAgents: () => void;
+  canRemoveAgents: boolean;
+  onClearOrientation: () => void;
+  canClearOrientation: boolean;
   agentSpeed: number;
   onAgentSpeedChange: (speed: number) => void;
   playbackRate: number;
@@ -23,6 +28,11 @@ export function ControlPanel({
   canGeneratePaths,
   onAddAgents,
   canAddAgents,
+  onRemoveDeadAgents,
+  onRemoveAllAgents,
+  canRemoveAgents,
+  onClearOrientation,
+  canClearOrientation,
   agentSpeed,
   onAgentSpeedChange,
   playbackRate,
@@ -49,6 +59,19 @@ export function ControlPanel({
           Add
         </button>
       </div>
+
+      <div className="agent-count-row">
+        <button type="button" onClick={onRemoveDeadAgents} disabled={!canRemoveAgents}>
+          Remove dead
+        </button>
+        <button type="button" onClick={onRemoveAllAgents} disabled={!canRemoveAgents}>
+          Remove all
+        </button>
+      </div>
+
+      <button type="button" onClick={onClearOrientation} disabled={!canClearOrientation}>
+        Clear directions
+      </button>
 
       <label htmlFor="agent-speed-input">Speed (px/s)</label>
       <input

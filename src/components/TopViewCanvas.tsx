@@ -12,6 +12,7 @@ import {
 import {
   createSfmWorld,
   rebuildWalls,
+  removeAgent,
   stepSocialForce,
   FIXED_DT_MS,
   type SfmWorld,
@@ -54,6 +55,13 @@ export interface AddAgentsRequest {
   count: number;
 }
 
+export interface RemoveAgentsRequest {
+  /** Bump this each time a removal button is clicked;
+   * a repeated identical request object is ignored. */
+  requestId: number;
+  mode: "dead" | "all";
+}
+
 export interface StuckAgentInfo {
   id: string;
   target: string;
@@ -89,6 +97,7 @@ export interface TopViewCanvasProps {
   hubs?: JunctionHub[];
   simulation?: SimulationConfig | null;
   addAgentsRequest?: AddAgentsRequest | null;
+  removeAgentsRequest?: RemoveAgentsRequest | null;
   isPlaying?: boolean;
   agentSpeed?: number;
   playbackRate?: number;
@@ -111,6 +120,7 @@ export function TopViewCanvas({
   hubs = [],
   simulation = null,
   addAgentsRequest = null,
+  removeAgentsRequest = null,
   isPlaying = false,
   agentSpeed = AGENT_MAX_SPEED,
   playbackRate = 1,
@@ -171,6 +181,7 @@ export function TopViewCanvas({
   const densityByCorridorRef = useRef<Map<string, number>>(new Map());
   const nextAgentIndexRef = useRef(0);
   const lastAddRequestIdRef = useRef<number | null>(null);
+  const lastRemoveRequestIdRef = useRef<number | null>(null);
   const lastValidPositionsRef = useRef<Map<string, Point>>(new Map());
   /** Agents still owed to the population from "Add" clicks, drained a few at
    * a time by the tick loop instead of spawned all at once. */
@@ -232,6 +243,40 @@ export function TopViewCanvas({
     lastAddRequestIdRef.current = addAgentsRequest.requestId;
     pendingAddCountRef.current += addAgentsRequest.count;
   }, [addAgentsRequest]);
+
+  // Remove agents from the CURRENT running world on button click, without
+  // resetting the physics world or corridor layout.
+  useEffect(() => {
+    if (!removeAgentsRequest) return;
+    if (lastRemoveRequestIdRef.current === removeAgentsRequest.requestId) return;
+    lastRemoveRequestIdRef.current = removeAgentsRequest.requestId;
+
+    const world = physicsWorldRef.current;
+    if (!world) return;
+
+    if (removeAgentsRequest.mode === "all") {
+      // Also drop agents still waiting in the "Add" queue - "remove all"
+      // should leave the world empty, not repopulating.
+      pendingAddCountRef.current = 0;
+      for (const state of agentsRef.current) {
+        removeAgent(world, state.id);
+      }
+      agentsRef.current = [];
+    } else {
+      const survivors: AgentRuntimeState[] = [];
+      for (const state of agentsRef.current) {
+        if (state.state === "dead") {
+          removeAgent(world, state.id);
+        } else {
+          survivors.push(state);
+        }
+      }
+      agentsRef.current = survivors;
+    }
+    onAgentCountChange?.(agentsRef.current.length);
+    draw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [removeAgentsRequest]);
 
   // Rebuild wall bodies (without respawning agents) whenever the corridor
   // floor plan itself changes, e.g. after a node drag commits mid-sim.
