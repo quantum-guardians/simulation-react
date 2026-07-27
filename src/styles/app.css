@@ -162,6 +162,21 @@ body {
   cursor: pointer;
 }
 
+.layout-mode-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.layout-mode-row select {
+  background: #1c1f26;
+  color: #e8eaf0;
+  border: 1px solid #2a2e38;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
 .random-graph-row {
   display: grid;
   grid-template-columns: 1fr 64px auto;

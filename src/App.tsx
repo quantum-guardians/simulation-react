@@ -18,7 +18,9 @@ import {
   parseEdgeListCsv,
   type ParsedCsvGraph,
   type Point,
+  type RawEdge,
 } from "./simulation/graph";
+import { computePlanarLayout, type LayoutMode } from "./simulation/planarLayout";
 import { buildCorridors, type Corridor, type JunctionHub } from "./simulation/corridors";
 import { buildAdjacency, orientedEdgesToLookup } from "./simulation/agents";
 import {
@@ -34,6 +36,32 @@ import { getHealth, solveOrientation } from "./api/client";
 import type { OrientationScore, OrientedEdge, SolverType } from "./api/types";
 
 type Stage = "input" | "layout" | "simulating";
+
+/**
+ * Planar mode only works for graphs that can be drawn without crossings, so a
+ * rejected graph falls back to the force-directed layout with an explanation
+ * instead of leaving the user without a drawing.
+ */
+function layoutGraph(
+  nodeIds: string[],
+  edges: RawEdge[],
+  layoutMode: LayoutMode
+): { positions: Map<string, Point>; warnings: string[] } {
+  const forceLayout = () =>
+    computeForceDirectedLayout(nodeIds, edges, { width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+
+  if (layoutMode !== "planar") return { positions: forceLayout(), warnings: [] };
+
+  const planar = computePlanarLayout(nodeIds, edges, {
+    width: CANVAS_WIDTH,
+    height: CANVAS_HEIGHT,
+  });
+  if (planar.ok) return { positions: planar.positions, warnings: [] };
+  return {
+    positions: forceLayout(),
+    warnings: [`planar layout unavailable (${planar.reason}); used force-directed layout instead`],
+  };
+}
 
 function App() {
   const [stage, setStage] = useState<Stage>("input");
@@ -65,18 +93,15 @@ function App() {
       .catch(() => setBackendStatus("backend unreachable"));
   }, []);
 
-  function handleCsvParsed(raw: string): { errors: string[] } | void {
+  function handleCsvParsed(raw: string, layoutMode: LayoutMode): { errors: string[] } | void {
     const result = parseEdgeListCsv(raw);
     if (!result.ok) {
       return { errors: result.errors };
     }
-    const layout = computeForceDirectedLayout(result.graph.nodeIds, result.graph.edges, {
-      width: CANVAS_WIDTH,
-      height: CANVAS_HEIGHT,
-    });
+    const { positions, warnings } = layoutGraph(result.graph.nodeIds, result.graph.edges, layoutMode);
     setCsvGraph(result.graph);
-    setNodePositions(layout);
-    setCsvWarnings(result.graph.warnings);
+    setNodePositions(positions);
+    setCsvWarnings([...result.graph.warnings, ...warnings]);
     setCorridors([]);
     setHubs([]);
     setSimulation(null);
