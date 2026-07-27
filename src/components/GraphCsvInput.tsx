@@ -4,9 +4,10 @@ import {
   MAX_RANDOM_GRAPH_NODES,
   MIN_RANDOM_GRAPH_NODES,
 } from "../simulation/graph";
+import type { LayoutMode } from "../simulation/planarLayout";
 
 export interface GraphCsvInputProps {
-  onParsed: (raw: string) => { errors: string[] } | void;
+  onParsed: (raw: string, layoutMode: LayoutMode) => { errors: string[] } | void;
 }
 
 const PLACEHOLDER = "A,B,1\nB,C,2\nC,D,1\nB,D,3";
@@ -14,10 +15,11 @@ const PLACEHOLDER = "A,B,1\nB,C,2\nC,D,1\nB,D,3";
 export function GraphCsvInput({ onParsed }: GraphCsvInputProps) {
   const [raw, setRaw] = useState("");
   const [randomNodeCount, setRandomNodeCount] = useState(5);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("force");
   const [errors, setErrors] = useState<string[]>([]);
 
-  function parseAndLayout(value: string) {
-    const result = onParsed(value);
+  function parseAndLayout(value: string, mode: LayoutMode = layoutMode) {
+    const result = onParsed(value, mode);
     setErrors(result?.errors ?? []);
   }
 
@@ -25,6 +27,16 @@ export function GraphCsvInput({ onParsed }: GraphCsvInputProps) {
     const generated = generateRandomConnectedGraphCsv(randomNodeCount);
     setRaw(generated);
     parseAndLayout(generated);
+  }
+
+  /**
+   * Re-lay out immediately instead of waiting for another "Parse & Layout"
+   * click: a mode picker that leaves the drawing unchanged reads as if the
+   * mode itself did nothing.
+   */
+  function handleLayoutModeChange(mode: LayoutMode) {
+    setLayoutMode(mode);
+    if (raw.trim().length > 0) parseAndLayout(raw, mode);
   }
 
   return (
@@ -37,6 +49,17 @@ export function GraphCsvInput({ onParsed }: GraphCsvInputProps) {
         value={raw}
         onChange={(e) => setRaw(e.target.value)}
       />
+      <div className="layout-mode-row">
+        <label htmlFor="layout-mode">Layout</label>
+        <select
+          id="layout-mode"
+          value={layoutMode}
+          onChange={(event) => handleLayoutModeChange(event.target.value as LayoutMode)}
+        >
+          <option value="force">Force-directed</option>
+          <option value="planar">Planar (no crossings)</option>
+        </select>
+      </div>
       <button type="button" onClick={() => parseAndLayout(raw)}>
         Parse &amp; Layout
       </button>
