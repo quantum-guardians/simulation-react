@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildEdgePairLookup,
   buildVertexMapping,
-  fromV1Response,
+  fromSolverResponse,
   toWeightedRequest,
 } from "./client";
-import type { GraphPayload, V1ResponseDto } from "./types";
+import type { GraphPayload, SolverResponseDto } from "./types";
 
 function makeGraph(): GraphPayload {
   return {
@@ -70,11 +70,11 @@ describe("toWeightedRequest", () => {
   });
 });
 
-describe("fromV1Response", () => {
+describe("fromSolverResponse", () => {
   it("recovers the original edgeId even when the solver reverses direction", () => {
     const graph = makeGraph();
     const mapping = buildVertexMapping(graph.nodes);
-    const response: V1ResponseDto = {
+    const response: SolverResponseDto = {
       // B→A reverses the "A--B" edge; C→B reverses "B--C".
       edges: [
         { _from: 2, to: 1 },
@@ -83,7 +83,7 @@ describe("fromV1Response", () => {
       optimized_graph_score: 12,
       bidirectional_graph_score: 10,
     };
-    const result = fromV1Response(response, mapping, buildEdgePairLookup(graph));
+    const result = fromSolverResponse(response, mapping, buildEdgePairLookup(graph));
     expect(result.orientedEdges).toEqual([
       { edgeId: "A--B", from: "B", to: "A" },
       { edgeId: "B--C", from: "C", to: "B" },
@@ -99,12 +99,12 @@ describe("fromV1Response", () => {
   it("maps score -1 to null and warns about missing strong connectivity", () => {
     const graph = makeGraph();
     const mapping = buildVertexMapping(graph.nodes);
-    const response: V1ResponseDto = {
+    const response: SolverResponseDto = {
       edges: [{ _from: 1, to: 2 }],
       optimized_graph_score: -1,
       bidirectional_graph_score: 10,
     };
-    const result = fromV1Response(response, mapping, buildEdgePairLookup(graph));
+    const result = fromSolverResponse(response, mapping, buildEdgePairLookup(graph));
     expect(result.score.optimizedApsp).toBeNull();
     expect(result.score.stronglyConnected).toBe(false);
     expect(result.warnings.some((w) => w.includes("not strongly connected"))).toBe(true);
@@ -113,7 +113,7 @@ describe("fromV1Response", () => {
   it("skips edges the solver returns that were never in the input", () => {
     const graph = makeGraph();
     const mapping = buildVertexMapping(graph.nodes);
-    const response: V1ResponseDto = {
+    const response: SolverResponseDto = {
       edges: [
         { _from: 1, to: 3 }, // A--C does not exist in the input graph
         { _from: 99, to: 1 }, // unknown vertex
@@ -121,7 +121,7 @@ describe("fromV1Response", () => {
       optimized_graph_score: 5,
       bidirectional_graph_score: 5,
     };
-    const result = fromV1Response(response, mapping, buildEdgePairLookup(graph));
+    const result = fromSolverResponse(response, mapping, buildEdgePairLookup(graph));
     expect(result.orientedEdges).toEqual([]);
     expect(result.warnings).toHaveLength(2);
   });

@@ -25,9 +25,9 @@ export interface OrientedEdge {
 
 /**
  * Solver keys double as the external mr2s-backend endpoint segments:
- * POST /api/v1/{solver}. See BACKEND_REFERENCE.md.
+ * POST /api/v2/solvers/{solver}. See BACKEND_REFERENCE.md.
  */
-export type SolverType = "mr2s" | "raw-sa" | "brute-force";
+export type SolverType = "raw-sa" | "qubo" | "robin";
 
 /** External wire format: one undirected weighted edge (vertices as ints). */
 export interface WeightedEdgeDto {
@@ -40,7 +40,7 @@ export interface WeightedRequestDto {
 }
 
 /** External wire format: solver response. `_from` avoids the JS reserved word. */
-export interface V1ResponseDto {
+export interface SolverResponseDto {
   edges: { _from: number; to: number }[];
   optimized_graph_score: number;
   bidirectional_graph_score: number;
@@ -56,7 +56,7 @@ export interface OrientationScore {
   stronglyConnected: boolean;
 }
 
-/** What solveOrientation resolves to after adapting the v1 response. */
+/** What solveOrientation resolves to after adapting the solver response. */
 export interface SolveResult {
   orientedEdges: OrientedEdge[];
   score: OrientationScore;

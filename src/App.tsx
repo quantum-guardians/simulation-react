@@ -54,7 +54,7 @@ function App() {
   const [agentCount, setAgentCount] = useState(0);
   const [simulationStats, setSimulationStats] = useState<SimulationStats | null>(null);
 
-  const [solver, setSolver] = useState<SolverType>("mr2s");
+  const [solver, setSolver] = useState<SolverType>("qubo");
   const [isRunningSolver, setIsRunningSolver] = useState(false);
   const [orientedEdges, setOrientedEdges] = useState<OrientedEdge[]>([]);
   const [score, setScore] = useState<OrientationScore | null>(null);

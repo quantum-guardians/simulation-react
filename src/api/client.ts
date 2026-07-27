@@ -6,7 +6,7 @@ import type {
   OrientationScore,
   SolveResult,
   SolverType,
-  V1ResponseDto,
+  SolverResponseDto,
   WeightedRequestDto,
 } from "./types";
 
@@ -53,10 +53,13 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 function describeHttpError(status: number, detail: string): string {
   if (status === 408) {
-    return "solver timed out (10 s server limit) - try a smaller graph or a non-brute-force solver";
+    return "solver timed out (10 s server limit) - try a smaller graph or the robin solver";
   }
   if (status === 400) {
     return detail || "invalid graph input";
+  }
+  if (status === 404) {
+    return detail || "this solver is not available on the backend";
   }
   if (status >= 500) {
     return `solver failed on the server${detail ? `: ${detail}` : ""}`;
@@ -70,7 +73,7 @@ export function getHealth(): Promise<HealthResponse> {
 
 // ---------------------------------------------------------------------------
 // Adapter: frontend graph (string node ids, edgeId "src--tgt")
-//        ↔ external v1 wire format (1-based integer vertices)
+//        ↔ external wire format (1-based integer vertices)
 // ---------------------------------------------------------------------------
 
 export interface VertexMapping {
@@ -144,7 +147,7 @@ export function buildEdgePairLookup(graph: GraphPayload): Map<string, GraphEdge>
   return lookup;
 }
 
-function adaptScore(response: V1ResponseDto): OrientationScore {
+function adaptScore(response: SolverResponseDto): OrientationScore {
   const optimized = response.optimized_graph_score;
   const bidirectional = response.bidirectional_graph_score;
   return {
@@ -154,8 +157,8 @@ function adaptScore(response: V1ResponseDto): OrientationScore {
   };
 }
 
-export function fromV1Response(
-  response: V1ResponseDto,
+export function fromSolverResponse(
+  response: SolverResponseDto,
   mapping: VertexMapping,
   pairLookup: Map<string, GraphEdge>
 ): SolveResult {
@@ -193,10 +196,10 @@ export async function solveOrientation(
 ): Promise<SolveResult> {
   const mapping = buildVertexMapping(graph.nodes);
   const { request, warnings: requestWarnings } = toWeightedRequest(graph, mapping);
-  const response = await requestJson<V1ResponseDto>(`/api/v1/${solver}`, {
+  const response = await requestJson<SolverResponseDto>(`/api/v2/solvers/${solver}`, {
     method: "POST",
     body: JSON.stringify(request),
   });
-  const result = fromV1Response(response, mapping, buildEdgePairLookup(graph));
+  const result = fromSolverResponse(response, mapping, buildEdgePairLookup(graph));
   return { ...result, warnings: [...requestWarnings, ...result.warnings] };
 }
