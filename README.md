@@ -24,7 +24,9 @@ docs/     API 및 백엔드 참고 문서
 간선 방향 최적화 백엔드는 이 저장소에 포함되어 있지 않고, 배포된
 **`https://quantum.yunseong.dev`** (mr2s-backend, FastAPI)를 사용합니다.
 API 명세는 [docs/BACKEND_REFERENCE.md](docs/BACKEND_REFERENCE.md)를 참고하세요.
-사용 엔드포인트: `POST /api/v1/mr2s`, `/api/v1/raw-sa`, `/api/v1/brute-force`.
+사용 엔드포인트: `POST /api/v2/solvers/{solver}` — solver는 `qubo`(분할 후
+QUBO+SA), `raw-sa`(시뮬레이티드 어닐링), `robin`(Robbins 방향 결정) 3가지입니다.
+`GET /api/v2/solvers`로 백엔드가 제공하는 solver 목록을 조회할 수 있습니다.
 
 ### 백엔드 연동 방식
 

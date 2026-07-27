@@ -104,6 +104,29 @@ Base URL(로컬): `http://localhost:8000`, Content-Type: `application/json`
 
 세 최적화 엔드포인트 모두 요청/응답 스키마가 동일하며, **10초 타임아웃**이 자식 프로세스 강제 종료 방식으로 적용됩니다 (`utils/timeout.py`, `TIME_OUT = 10`).
 
+### 4.2b V2 solver 카탈로그 — **이 프로젝트가 사용하는 경로**
+
+V1은 경로마다 solver가 고정되어 있고 파라미터를 줄 수 없습니다. V2는 solver를 경로 파라미터로 받습니다. 요청/응답 스키마는 V1과 동일하고, 선택적 `options` 객체만 추가됩니다.
+
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /api/v2/solvers` | solver 목록 (`name`, `description`, `options`, `requires_dwave_credentials`, `aliases`) |
+| `POST /api/v2/solvers/{solver_name}` | 지정 solver 실행. body `{ edges, options? }` |
+
+| solver | alias | 알고리즘 | 옵션 |
+|---|---|---|---|
+| `qubo` | `dnc-qubo`, `dnc-qubo-sa` | 그래프를 분할한 뒤 각 부분 그래프를 QUBO로 풀고 병합 (`DnCMr2sSolver`) | - |
+| `raw-sa` | `sa` | 그래프 지표(APSP + flow)를 직접 평가하는 시뮬레이티드 어닐링 (`SAMR2SSolver`) | `sweeps_per_temperature`, `num_restarts`, `random_seed`, `apsp_weight`, `flow_weight`, `disconnected_pair_penalty` |
+| `robin` | `robbin` | DFS 한 번으로 전체 간선 방향을 확정하는 Robbins 방향 결정 (`Robbin`) | - |
+
+V2 추가 오류:
+
+| 상태 | 의미 |
+|---|---|
+| 400 | solver가 받지 않는 옵션을 보냈거나, 브릿지가 있는 그래프에 `robin`을 실행 (강한 방향성 불가) |
+| 404 | 없는 solver 이름 — 본문에 사용 가능한 이름 목록이 담김 |
+| 503 | solver 생성 실패 (D-Wave 자격증명 필요 solver를 자격증명 없이 호출한 경우 등) |
+
 ### 4.3 `POST /api/v1/mr2s/estimate` — 물리 큐빗 수 추정
 
 MR2S 파이프라인이 생성하는 BQM(Binary Quadratic Model)을 D-Wave Pegasus P16 토폴로지에 minorminer로 임베딩했을 때 필요한 물리 큐빗 수를 추정합니다. 최적화는 실행하지 않습니다.
